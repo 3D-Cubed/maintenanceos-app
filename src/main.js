@@ -15,6 +15,8 @@ let resolvingTicket = false
 const statusOptions = ['Operational', 'Needs Attention', 'Under Repair', 'Out of Service']
 const priorityOptions = ['Low', 'Medium', 'High', 'Critical']
 const repairStatusOptions = ['Open', 'Diagnosing', 'Waiting Parts', 'In Repair', 'Resolved']
+const slaHours = { Low: 168, Medium: 72, High: 24, Critical: 8 }
+
 
 init()
 
@@ -204,6 +206,8 @@ function renderDashboard() {
   const underRepair = assets.filter(a => a.status === 'Under Repair').length
   const attention = assets.filter(a => a.status === 'Needs Attention').length
   const openRepairs = repairs.filter(r => r.status !== 'Resolved').length
+  const overdueRepairs = repairs.filter(r => getRepairHealth(r).state === 'overdue').length
+  const criticalOpen = repairs.filter(r => r.status !== 'Resolved' && r.priority === 'Critical').length
 
   content().innerHTML = `
     ${renderHeader('LIVE FLEET OVERVIEW', 'Dashboard', '<button id="refresh">Refresh</button>')}
@@ -212,16 +216,26 @@ function renderDashboard() {
       ${statCard('Operational', operational, 'Available for use')}
       ${statCard('Under Repair', underRepair, 'Active engineering work')}
       ${statCard('Needs Attention', attention, 'Service or inspection required')}
-      ${statCard('Open Repairs', openRepairs, 'Tickets not resolved')}
+      ${statCard('Overdue Repairs', overdueRepairs, `${criticalOpen} critical open`)}
     </section>
     <section class="grid two">
       <div class="card">
-        <h2>Recent Assets</h2>
+        <div class="section-title-row compact">
+          <div>
+            <h2>Recent Assets</h2>
+            <p class="muted">Live status from service and repair activity.</p>
+          </div>
+        </div>
         ${assets.slice(0, 6).map(assetRow).join('') || '<p class="muted">No assets yet.</p>'}
       </div>
-      <div class="card">
-        <h2>Recent Repairs</h2>
-        ${repairs.slice(0, 6).map(repairRow).join('') || '<p class="muted">No repair tickets yet.</p>'}
+      <div class="card smart-panel">
+        <div class="section-title-row compact">
+          <div>
+            <h2>Priority Radar</h2>
+            <p class="muted">SLA driven view of active repair risk.</p>
+          </div>
+        </div>
+        ${repairs.filter(r => r.status !== 'Resolved').slice(0, 6).map(repairRow).join('') || '<p class="muted">No active repair tickets.</p>'}
       </div>
     </section>
   `
@@ -293,7 +307,7 @@ function assetRow(a) {
       <div>
         <h3>${escapeHtml(a.name || 'Unnamed Asset')}</h3>
         <p>${escapeHtml(a.type || 'Asset')} • ${escapeHtml(a.location || 'No location')}</p>
-        <small>Status: ${escapeHtml(a.status || 'Operational')}</small>
+        <small>Status: <span class="status-pill ${statusClass(a.status)}">${escapeHtml(a.status || 'Operational')}</span></small>
       </div>
       <div class="row-actions">
         <button onclick="location.hash='asset/${a.id}'">Open</button>
@@ -330,7 +344,7 @@ async function renderAssetDetail(id) {
       <div class="card qr-mini">
         <h2>QR Link</h2>
         <img src="${qr}" alt="QR code" />
-        <button onclick="navigator.clipboard.writeText('${qrUrl}')">Copy Asset Link</button>
+        <button onclick="navigator.clipboard.writeText('${qrUrl}'); window.toast?.('Asset link copied.', 'success')">Copy Asset Link</button><button class="primary" onclick="document.querySelector('#repairTitle')?.focus()">Log Fault</button>
       </div>
     </section>
     <section class="card">
@@ -350,8 +364,8 @@ async function renderAssetDetail(id) {
       <button id="saveRepair" class="primary">Save Repair</button>
     </section>
     <section class="card">
-      <h2>Repair History</h2>
-      ${assetRepairs.map(repairRow).join('') || '<p class="muted">No repairs logged.</p>'}
+      <h2>Asset History Timeline</h2>
+      ${assetHistoryTimeline(a, assetRepairs)}
     </section>
   `
 
@@ -661,16 +675,21 @@ function renderRepairs() {
 function repairRow(r) {
   const asset = assets.find(a => a.id === r.asset_id)
   const resolved = r.status === 'Resolved'
+  const health = getRepairHealth(r)
   return `
-    <div class="data-row repair-row ${resolved ? 'resolved' : ''}">
+    <div class="data-row repair-row ${resolved ? 'resolved' : ''} ${health.state}">
       <div class="repair-main">
-        <h3>${escapeHtml(r.title || 'Untitled repair')}</h3>
-        <p>${escapeHtml(asset?.name || 'Unknown Asset')} • ${escapeHtml(r.priority || 'Medium')} • ${escapeHtml(r.status || 'Open')}</p>
+        <div class="repair-title-line">
+          <h3>${escapeHtml(r.title || 'Untitled repair')}</h3>
+          <span class="priority-pill ${String(r.priority || 'Medium').toLowerCase()}">${escapeHtml(r.priority || 'Medium')}</span>
+          <span class="sla-pill ${health.state}">${health.label}</span>
+        </div>
+        <p>${escapeHtml(asset?.name || 'Unknown Asset')} • ${escapeHtml(r.status || 'Open')}</p>
         <small>${escapeHtml(r.description || '')}</small>
         ${r.resolution_notes ? `<small><b>Resolution:</b> ${escapeHtml(r.resolution_notes)}</small>` : ''}
-        ${r.resolved_at ? `<small>Resolved: ${new Date(r.resolved_at).toLocaleString()}</small>` : ''}
+        ${r.resolved_at ? `<small>Resolved: ${new Date(r.resolved_at).toLocaleString()}</small>` : `<small>Opened: ${formatAge(r.created_at)}</small>`}
       </div>
-      ${r.photo_url ? `<img class="repair-thumb" src="${escapeHtml(r.photo_url)}" alt="Repair photo" />` : ''}
+      ${r.photo_url ? `<img class="repair-thumb" src="${escapeHtml(r.photo_url)}" alt="Repair photo" onclick="window.openImagePreview('${escapeHtml(r.photo_url)}', '${escapeHtml(r.title || 'Repair photo')}')" />` : ''}
       <div class="row-actions">
         ${!resolved ? `<button class="resolve-btn" onclick="window.resolveRepair('${r.id}', '${r.asset_id}')">Resolve</button>` : '<span class="pill ok">Resolved</span>'}
       </div>
@@ -724,7 +743,7 @@ async function renderQR() {
         <h2>${escapeHtml(a.name)}</h2>
         <p>${escapeHtml(a.type || 'Asset')} • ${escapeHtml(a.location || '')}</p>
         <img src="${qr}" alt="QR code for ${escapeHtml(a.name)}" />
-        <p>Scan for service record</p>
+        <p>Scan → open asset → log repair</p>
         <div class="qr-actions">
           <button onclick="window.open('${url}', '_blank')">Open</button>
           <button onclick="navigator.clipboard.writeText('${url}')">Copy Link</button>
@@ -742,6 +761,7 @@ function renderReports() {
     <section class="stats-grid">
       ${statCard('Total Assets', assets.length, 'Registered equipment')}
       ${statCard('Repair Tickets', repairs.length, 'All tickets')}
+      ${statCard('Overdue Repairs', repairs.filter(r => getRepairHealth(r).state === 'overdue').length, 'SLA exceeded')}
       ${statCard('Repair Cost', `£${totalCost.toFixed(2)}`, 'Logged repair spend')}
       ${statCard('Downtime', `${downtime.toFixed(1)}h`, 'Logged machine downtime')}
     </section>
@@ -749,6 +769,86 @@ function renderReports() {
 }
 
 window.resolveRepair = resolveRepair
+
+window.toast = toast
+window.openImagePreview = openImagePreview
+
+function repairAgeHours(repair) {
+  if (!repair?.created_at || repair.status === 'Resolved') return 0
+  return Math.max(0, (Date.now() - new Date(repair.created_at).getTime()) / 36e5)
+}
+
+function getRepairHealth(repair) {
+  if (repair.status === 'Resolved') return { state: 'resolved', label: 'Resolved' }
+  const priority = repair.priority || 'Medium'
+  const limit = slaHours[priority] || slaHours.Medium
+  const age = repairAgeHours(repair)
+  if (age >= limit) return { state: 'overdue', label: 'Overdue' }
+  if (age >= limit * 0.75) return { state: 'warning', label: 'Approaching SLA' }
+  return { state: 'healthy', label: `${Math.max(1, Math.round(limit - age))}h SLA left` }
+}
+
+function formatAge(dateValue) {
+  if (!dateValue) return 'Unknown date'
+  const hours = Math.max(0, Math.round((Date.now() - new Date(dateValue).getTime()) / 36e5))
+  if (hours < 24) return `${hours || 1}h ago`
+  return `${Math.round(hours / 24)}d ago`
+}
+
+function statusClass(status = 'Operational') {
+  return String(status).toLowerCase().replace(/\s+/g, '-')
+}
+
+function assetHistoryTimeline(asset, assetRepairs) {
+  const items = [
+    { date: asset.created_at, title: 'Asset created', body: `${asset.type || 'Asset'} registered in ${asset.location || 'no location set'}`, tone: 'created' },
+    ...assetRepairs.map(r => ({
+      date: r.created_at,
+      title: r.status === 'Resolved' ? `Repair resolved: ${r.title || 'Ticket'}` : `Repair logged: ${r.title || 'Ticket'}`,
+      body: `${r.priority || 'Medium'} priority • ${r.status || 'Open'}${r.resolution_notes ? ` • ${r.resolution_notes}` : ''}`,
+      tone: r.status === 'Resolved' ? 'resolved' : getRepairHealth(r).state,
+      photo: r.photo_url
+    }))
+  ].filter(i => i.date).sort((a,b) => new Date(b.date) - new Date(a.date))
+
+  if (!items.length) return '<p class="muted">No history yet.</p>'
+
+  return `<div class="timeline">${items.map(i => `
+    <div class="timeline-item ${i.tone}">
+      <div class="timeline-dot"></div>
+      <div class="timeline-body">
+        <strong>${escapeHtml(i.title)}</strong>
+        <span>${new Date(i.date).toLocaleString()}</span>
+        <p>${escapeHtml(i.body)}</p>
+        ${i.photo ? `<img class="timeline-thumb" src="${escapeHtml(i.photo)}" onclick="window.openImagePreview('${escapeHtml(i.photo)}', '${escapeHtml(i.title)}')" />` : ''}
+      </div>
+    </div>`).join('')}</div>`
+}
+
+function openImagePreview(url, title = 'Repair photo') {
+  let modal = document.querySelector('#imagePreviewModal')
+  if (!modal) {
+    document.body.insertAdjacentHTML('beforeend', `
+      <div id="imagePreviewModal" class="image-modal hidden">
+        <div class="image-backdrop" onclick="window.closeImagePreview()"></div>
+        <figure class="image-card">
+          <button class="icon-btn" onclick="window.closeImagePreview()">×</button>
+          <img id="imagePreviewSrc" src="" alt="Repair image preview" />
+          <figcaption id="imagePreviewCaption"></figcaption>
+        </figure>
+      </div>
+    `)
+    modal = document.querySelector('#imagePreviewModal')
+  }
+  document.querySelector('#imagePreviewSrc').src = url
+  document.querySelector('#imagePreviewCaption').textContent = title
+  modal.classList.remove('hidden')
+}
+
+window.closeImagePreview = function closeImagePreview() {
+  document.querySelector('#imagePreviewModal')?.classList.add('hidden')
+}
+
 
 async function markServiced(assetId) {
   const days = Number(prompt('Next service due in how many days?', '90') || 90)
