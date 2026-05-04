@@ -332,7 +332,8 @@ async function renderAssetDetail(id) {
       </div>
     </section>
     <section class="card">
-      <h2>Log Repair</h2>
+      <h2>Quick Log Repair</h2>
+      <p class="muted">QR workflow: scan, describe fault, attach photo, submit.</p>
       <div id="messageBox" class="message hidden"></div>
       <input id="repairTitle" placeholder="Fault title" />
       <textarea id="repairDesc" placeholder="Fault description"></textarea>
@@ -343,6 +344,7 @@ async function renderAssetDetail(id) {
         <input id="repairDowntime" type="number" step="0.1" placeholder="Downtime hours" />
       </div>
       <input id="repairParts" placeholder="Parts used" />
+      <label class="file-label">Attach photo <input id="repairPhoto" type="file" accept="image/*" /></label>
       <button id="saveRepair" class="primary">Save Repair</button>
     </section>
     <section class="card">
@@ -352,6 +354,64 @@ async function renderAssetDetail(id) {
   `
 
   document.querySelector('#saveRepair').onclick = () => addRepair(a.id)
+}
+
+
+async function uploadRepairPhoto() {
+  const input = document.querySelector('#repairPhoto')
+  const file = input?.files?.[0]
+  if (!file) return null
+
+  const safeName = file.name.replace(/[^a-z0-9.\-_]/gi, '_')
+  const path = `${Date.now()}-${safeName}`
+  const { error } = await supabase.storage.from('repair-photos').upload(path, file, { upsert: false })
+  if (error) {
+    showMessage(`Photo upload skipped: ${error.message}`, 'error')
+    return null
+  }
+
+  const { data } = supabase.storage.from('repair-photos').getPublicUrl(path)
+  return data?.publicUrl || null
+}
+
+async function updateAssetStatusFromRepairs(assetId) {
+  const { data, error } = await supabase
+    .from('repair_tickets')
+    .select('status, priority')
+    .eq('asset_id', assetId)
+    .neq('status', 'Resolved')
+
+  if (error) return console.warn(error.message)
+
+  let nextStatus = 'Operational'
+  if (data?.some(r => r.status === 'In Repair')) nextStatus = 'Under Repair'
+  else if (data?.length) nextStatus = 'Needs Attention'
+
+  await supabase.from('assets').update({ status: nextStatus }).eq('id', assetId)
+}
+
+async function resolveRepair(repairId, assetId) {
+  const notes = prompt('Resolution notes / action taken:')
+  if (notes === null) return
+
+  const { error } = await supabase
+    .from('repair_tickets')
+    .update({
+      status: 'Resolved',
+      resolved_at: new Date().toISOString(),
+      resolution_notes: notes
+    })
+    .eq('id', repairId)
+
+  if (error) return alert(error.message)
+
+  await updateAssetStatusFromRepairs(assetId)
+  await audit('repair_resolved', 'repair_tickets', notes || repairId)
+  await loadData()
+
+  const hash = location.hash.replace('#', '')
+  if (hash.startsWith('asset/')) renderAssetDetail(assetId)
+  else renderRepairs()
 }
 
 async function addRepair(assetId = null) {
@@ -368,14 +428,14 @@ async function addRepair(assetId = null) {
     status: value('#repairStatus') || 'Open',
     cost: value('#repairCost') ? Number(value('#repairCost')) : null,
     downtime_hours: value('#repairDowntime') ? Number(value('#repairDowntime')) : null,
-    parts_used: value('#repairParts')
+    parts_used: value('#repairParts'),
+    photo_url: await uploadRepairPhoto()
   }
 
   const { error } = await supabase.from('repair_tickets').insert(payload)
   if (error) return showMessage(error.message, 'error')
 
-  const newStatus = payload.status === 'Resolved' ? 'Operational' : payload.status === 'In Repair' ? 'Under Repair' : 'Needs Attention'
-  await supabase.from('assets').update({ status: newStatus }).eq('id', selectedAsset)
+  await updateAssetStatusFromRepairs(selectedAsset)
   await audit('repair_logged', 'repair_tickets', title)
 
   await loadData()
@@ -399,6 +459,7 @@ function renderRepairs() {
         <input id="repairDowntime" type="number" step="0.1" placeholder="Downtime hours" />
       </div>
       <input id="repairParts" placeholder="Parts used" />
+      <label class="file-label">Attach photo <input id="repairPhoto" type="file" accept="image/*" /></label>
       <button id="addRepair" class="primary">Create Ticket</button>
     </section>
     <section class="card">
@@ -411,12 +472,19 @@ function renderRepairs() {
 
 function repairRow(r) {
   const asset = assets.find(a => a.id === r.asset_id)
+  const resolved = r.status === 'Resolved'
   return `
-    <div class="data-row">
-      <div>
+    <div class="data-row repair-row ${resolved ? 'resolved' : ''}">
+      <div class="repair-main">
         <h3>${escapeHtml(r.title || 'Untitled repair')}</h3>
         <p>${escapeHtml(asset?.name || 'Unknown Asset')} • ${escapeHtml(r.priority || 'Medium')} • ${escapeHtml(r.status || 'Open')}</p>
         <small>${escapeHtml(r.description || '')}</small>
+        ${r.resolution_notes ? `<small><b>Resolution:</b> ${escapeHtml(r.resolution_notes)}</small>` : ''}
+        ${r.resolved_at ? `<small>Resolved: ${new Date(r.resolved_at).toLocaleString()}</small>` : ''}
+      </div>
+      ${r.photo_url ? `<img class="repair-thumb" src="${escapeHtml(r.photo_url)}" alt="Repair photo" />` : ''}
+      <div class="row-actions">
+        ${!resolved ? `<button onclick="window.resolveRepair('${r.id}', '${r.asset_id}')">Resolve</button>` : '<span class="pill ok">Resolved</span>'}
       </div>
     </div>
   `
@@ -435,6 +503,7 @@ function renderMaintenance() {
             <p>Next service: ${escapeHtml(a.next_service_date || 'Not set')}</p>
             <small>${a.next_service_date && a.next_service_date < today ? 'Overdue' : 'Scheduled'}</small>
           </div>
+          <div class="row-actions"><button onclick="window.markServiced('${a.id}')">Mark Serviced</button></div>
         </div>
       `).join('') || '<p class="muted">No assets to schedule.</p>'}
     </section>
@@ -490,6 +559,22 @@ function renderReports() {
     </section>
   `
 }
+
+window.resolveRepair = resolveRepair
+
+async function markServiced(assetId) {
+  const days = Number(prompt('Next service due in how many days?', '90') || 90)
+  const due = new Date()
+  due.setDate(due.getDate() + days)
+  const next = due.toISOString().slice(0, 10)
+  const { error } = await supabase.from('assets').update({ status: 'Operational', next_service_date: next }).eq('id', assetId)
+  if (error) return alert(error.message)
+  await audit('asset_serviced', 'assets', `Next due ${next}`)
+  await loadData()
+  renderMaintenance()
+}
+
+window.markServiced = markServiced
 
 async function audit(action, tableName, detail) {
   try {
