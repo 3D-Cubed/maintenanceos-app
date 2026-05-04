@@ -9,6 +9,8 @@ let assets = []
 let repairs = []
 let maintenance = []
 let activePage = 'dashboard'
+let resolveContext = null
+let resolvingTicket = false
 
 const statusOptions = ['Operational', 'Needs Attention', 'Under Repair', 'Out of Service']
 const priorityOptions = ['Low', 'Medium', 'High', 'Critical']
@@ -390,28 +392,167 @@ async function updateAssetStatusFromRepairs(assetId) {
   await supabase.from('assets').update({ status: nextStatus }).eq('id', assetId)
 }
 
-async function resolveRepair(repairId, assetId) {
-  const notes = prompt('Resolution notes / action taken:')
-  if (notes === null) return
+function openResolveModal(repairId, assetId) {
+  ensureResolveModal()
+  const repair = repairs.find(r => r.id === repairId)
+  const asset = assets.find(a => a.id === assetId)
+
+  resolveContext = { repairId, assetId }
+  resolvingTicket = false
+
+  document.querySelector('#resolveTicketTitle').textContent = repair?.title || 'Repair Ticket'
+  document.querySelector('#resolveAssetName').textContent = asset?.name || 'Unknown asset'
+  document.querySelector('#resolveMeta').textContent = `${repair?.priority || 'Medium'} priority • ${repair?.status || 'Open'}`
+  document.querySelector('#resolutionNotes').value = repair?.resolution_notes || ''
+  document.querySelector('#resolutionParts').value = repair?.parts_used || ''
+  document.querySelector('#resolutionCost').value = repair?.cost || ''
+  document.querySelector('#resolutionDowntime').value = repair?.downtime_hours || ''
+  document.querySelector('#resolveSuccess').classList.add('hidden')
+  document.querySelector('#resolveModal').classList.remove('hidden')
+}
+
+function closeResolveModal() {
+  document.querySelector('#resolveModal')?.classList.add('hidden')
+  resolveContext = null
+  resolvingTicket = false
+}
+
+async function confirmResolveRepair() {
+  if (!resolveContext || resolvingTicket) return
+
+  const confirmBtn = document.querySelector('#confirmResolve')
+  const notes = value('#resolutionNotes')
+  const parts = value('#resolutionParts')
+  const costValue = value('#resolutionCost')
+  const downtimeValue = value('#resolutionDowntime')
+
+  if (!notes) {
+    toast('Add resolution notes before closing the ticket.', 'error')
+    return
+  }
+
+  resolvingTicket = true
+  confirmBtn.disabled = true
+  confirmBtn.innerHTML = '<span class="btn-spinner"></span> Resolving...'
 
   const { error } = await supabase
     .from('repair_tickets')
     .update({
       status: 'Resolved',
       resolved_at: new Date().toISOString(),
-      resolution_notes: notes
+      resolution_notes: notes,
+      parts_used: parts || null,
+      cost: costValue ? Number(costValue) : null,
+      downtime_hours: downtimeValue ? Number(downtimeValue) : null
     })
-    .eq('id', repairId)
+    .eq('id', resolveContext.repairId)
 
-  if (error) return alert(error.message)
+  confirmBtn.disabled = false
+  confirmBtn.innerHTML = 'Resolve Ticket'
+  resolvingTicket = false
 
-  await updateAssetStatusFromRepairs(assetId)
-  await audit('repair_resolved', 'repair_tickets', notes || repairId)
+  if (error) {
+    toast(error.message, 'error')
+    return
+  }
+
+  await updateAssetStatusFromRepairs(resolveContext.assetId)
+  await audit('repair_resolved', 'repair_tickets', notes || resolveContext.repairId)
   await loadData()
 
-  const hash = location.hash.replace('#', '')
-  if (hash.startsWith('asset/')) renderAssetDetail(assetId)
-  else renderRepairs()
+  document.querySelector('#resolveSuccess').classList.remove('hidden')
+  toast('Repair ticket resolved.', 'success')
+
+  const assetId = resolveContext.assetId
+  setTimeout(() => {
+    closeResolveModal()
+    const hash = location.hash.replace('#', '')
+    if (hash.startsWith('asset/')) renderAssetDetail(assetId)
+    else renderRepairs()
+  }, 850)
+}
+
+function ensureResolveModal() {
+  if (document.querySelector('#resolveModal')) return
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="resolveModal" class="resolve-modal hidden" aria-hidden="true">
+      <div class="resolve-backdrop" data-close-resolve></div>
+      <section class="resolve-card" role="dialog" aria-modal="true" aria-labelledby="resolveTicketTitle">
+        <div class="resolve-motion" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+
+        <div class="resolve-head">
+          <div>
+            <p class="eyebrow">REPAIR CLOSURE</p>
+            <h2 id="resolveTicketTitle">Resolve Repair</h2>
+            <p id="resolveAssetName" class="muted">Asset</p>
+            <small id="resolveMeta" class="muted"></small>
+          </div>
+          <button id="closeResolve" class="icon-btn" title="Close">×</button>
+        </div>
+
+        <div id="resolveSuccess" class="success-burst hidden">
+          <div class="success-tick">✓</div>
+          <div>
+            <strong>Ticket resolved</strong>
+            <span>Asset status has been recalculated.</span>
+          </div>
+        </div>
+
+        <label class="field-label">Resolution notes
+          <textarea id="resolutionNotes" placeholder="What was found, what was repaired, and how was it verified?"></textarea>
+        </label>
+
+        <div class="form-grid resolve-grid">
+          <label class="field-label">Parts used
+            <input id="resolutionParts" placeholder="e.g. nozzle, belt, sensor" />
+          </label>
+          <label class="field-label">Repair cost (£)
+            <input id="resolutionCost" type="number" step="0.01" placeholder="0.00" />
+          </label>
+          <label class="field-label">Downtime (hours)
+            <input id="resolutionDowntime" type="number" step="0.1" placeholder="0.0" />
+          </label>
+        </div>
+
+        <div class="resolve-actions">
+          <button id="cancelResolve" class="ghost">Cancel</button>
+          <button id="confirmResolve" class="primary">Resolve Ticket</button>
+        </div>
+      </section>
+    </div>
+  `)
+
+  document.querySelector('#closeResolve').onclick = closeResolveModal
+  document.querySelector('#cancelResolve').onclick = closeResolveModal
+  document.querySelector('[data-close-resolve]').onclick = closeResolveModal
+  document.querySelector('#confirmResolve').onclick = confirmResolveRepair
+}
+
+function toast(message, type = 'info') {
+  let toastBox = document.querySelector('#toastBox')
+  if (!toastBox) {
+    toastBox = document.createElement('div')
+    toastBox.id = 'toastBox'
+    toastBox.className = 'toast-box'
+    document.body.appendChild(toastBox)
+  }
+
+  const item = document.createElement('div')
+  item.className = `toast ${type}`
+  item.textContent = message
+  toastBox.appendChild(item)
+  setTimeout(() => item.classList.add('show'), 20)
+  setTimeout(() => {
+    item.classList.remove('show')
+    setTimeout(() => item.remove(), 220)
+  }, 3200)
+}
+
+async function resolveRepair(repairId, assetId) {
+  openResolveModal(repairId, assetId)
 }
 
 async function addRepair(assetId = null) {
@@ -484,7 +625,7 @@ function repairRow(r) {
       </div>
       ${r.photo_url ? `<img class="repair-thumb" src="${escapeHtml(r.photo_url)}" alt="Repair photo" />` : ''}
       <div class="row-actions">
-        ${!resolved ? `<button onclick="window.resolveRepair('${r.id}', '${r.asset_id}')">Resolve</button>` : '<span class="pill ok">Resolved</span>'}
+        ${!resolved ? `<button class="resolve-btn" onclick="window.resolveRepair('${r.id}', '${r.asset_id}')">Resolve</button>` : '<span class="pill ok">Resolved</span>'}
       </div>
     </div>
   `
