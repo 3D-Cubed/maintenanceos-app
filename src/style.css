@@ -434,3 +434,167 @@ h2 { margin-top: 0; }
     max-width: none;
   }
 }
+
+
+/* v12 repair form polish + Medstrom Engineering branding */
+.repair-form-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.repair-form-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(120deg, rgba(35,255,190,0.08), transparent 32%),
+    radial-gradient(circle at 88% 12%, rgba(91,180,255,0.12), transparent 28%);
+  opacity: 0.9;
+}
+
+.repair-form-card > * {
+  position: relative;
+}
+
+.section-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.section-title-row h2 {
+  margin-bottom: 6px;
+}
+
+.repair-form-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.field-block {
+  display: grid;
+  gap: 8px;
+}
+
+.field-block label {
+  color: #c7fff0;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.035em;
+}
+
+.field-block input,
+.field-block select,
+.field-block textarea {
+  min-height: 54px;
+}
+
+.field-block textarea {
+  min-height: 132px;
+  line-height: 1.45;
+}
+
+.repair-meta-grid {
+  gap: 18px;
+  margin-bottom: 0;
+}
+
+.premium-upload {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 16px;
+  min-height: 96px;
+  padding: 20px;
+  border: 1px dashed rgba(36, 226, 170, 0.58);
+  background:
+    linear-gradient(135deg, rgba(36,226,170,0.10), rgba(93,182,255,0.08)),
+    rgba(255,255,255,0.035);
+  cursor: pointer;
+  transition: transform .2s ease, border-color .2s ease, background .2s ease, box-shadow .2s ease;
+}
+
+.premium-upload:hover {
+  transform: translateY(-1px);
+  border-color: rgba(83, 255, 211, 0.95);
+  background:
+    linear-gradient(135deg, rgba(36,226,170,0.16), rgba(93,182,255,0.12)),
+    rgba(255,255,255,0.045);
+  box-shadow: 0 0 28px rgba(36,226,170,0.10);
+}
+
+.upload-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #24e2aa, #5db6ff);
+  color: #02110d;
+  font-size: 28px;
+  font-weight: 900;
+  box-shadow: 0 0 22px rgba(36,226,170,0.28);
+}
+
+.upload-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.upload-copy strong {
+  color: #effffb;
+  font-size: 16px;
+}
+
+.upload-copy small {
+  color: #a7d8d2;
+}
+
+.premium-upload input[type="file"] {
+  grid-column: 1 / -1;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 12px;
+  background: rgba(0,0,0,0.16);
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 2px;
+}
+
+.form-actions .primary {
+  min-width: 170px;
+  box-shadow: 0 0 24px rgba(36,226,170,0.12);
+}
+
+@media (max-width: 760px) {
+  .section-title-row {
+    flex-direction: column;
+  }
+
+  .repair-form-stack {
+    gap: 16px;
+  }
+
+  .premium-upload {
+    grid-template-columns: 1fr;
+    text-align: left;
+  }
+
+  .upload-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  .form-actions,
+  .form-actions .primary {
+    width: 100%;
+  }
+}

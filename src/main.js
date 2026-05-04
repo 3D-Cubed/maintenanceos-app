@@ -138,7 +138,7 @@ function renderShell(withSidebar = true) {
         <div class="brand">
           <div class="orb"></div>
           <div>
-            <h2>MaintenanceOS</h2>
+            <h2>Medstrom Engineering</h2>
             <p>Equipment Command Centre</p>
           </div>
         </div>
@@ -587,21 +587,68 @@ async function addRepair(assetId = null) {
 function renderRepairs() {
   content().innerHTML = `
     ${renderHeader('REPAIR CONTROL', 'Repairs')}
-    <section class="card">
-      <h2>New Repair Ticket</h2>
-      <div id="messageBox" class="message hidden"></div>
-      <select id="repairAsset">${assets.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('')}</select>
-      <input id="repairTitle" placeholder="Fault title" />
-      <textarea id="repairDesc" placeholder="Fault description"></textarea>
-      <div class="form-grid">
-        <select id="repairPriority">${priorityOptions.map(o => `<option>${o}</option>`).join('')}</select>
-        <select id="repairStatus">${repairStatusOptions.map(o => `<option>${o}</option>`).join('')}</select>
-        <input id="repairCost" type="number" step="0.01" placeholder="Cost £" />
-        <input id="repairDowntime" type="number" step="0.1" placeholder="Downtime hours" />
+    <section class="card repair-form-card">
+      <div class="section-title-row">
+        <div>
+          <h2>New Repair Ticket</h2>
+          <p class="muted">Log a fault, attach evidence and update asset status in one workflow.</p>
+        </div>
       </div>
-      <input id="repairParts" placeholder="Parts used" />
-      <label class="file-label">Attach photo <input id="repairPhoto" type="file" accept="image/*" /></label>
-      <button id="addRepair" class="primary">Create Ticket</button>
+      <div id="messageBox" class="message hidden"></div>
+
+      <div class="repair-form-stack">
+        <div class="field-block wide">
+          <label>Asset</label>
+          <select id="repairAsset">${assets.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('')}</select>
+        </div>
+
+        <div class="field-block wide">
+          <label>Fault title</label>
+          <input id="repairTitle" placeholder="e.g. Extruder blockage / axis fault / calibration issue" />
+        </div>
+
+        <div class="field-block wide">
+          <label>Fault description</label>
+          <textarea id="repairDesc" placeholder="Describe the symptoms, when it started, and any checks already carried out..."></textarea>
+        </div>
+
+        <div class="form-grid repair-meta-grid">
+          <div class="field-block">
+            <label>Priority</label>
+            <select id="repairPriority">${priorityOptions.map(o => `<option>${o}</option>`).join('')}</select>
+          </div>
+          <div class="field-block">
+            <label>Status</label>
+            <select id="repairStatus">${repairStatusOptions.map(o => `<option>${o}</option>`).join('')}</select>
+          </div>
+          <div class="field-block">
+            <label>Estimated cost</label>
+            <input id="repairCost" type="number" step="0.01" placeholder="£0.00" />
+          </div>
+          <div class="field-block">
+            <label>Downtime</label>
+            <input id="repairDowntime" type="number" step="0.1" placeholder="Hours" />
+          </div>
+        </div>
+
+        <div class="field-block wide">
+          <label>Parts used / required</label>
+          <input id="repairParts" placeholder="e.g. nozzle, PTFE tube, belt, sensor, control board..." />
+        </div>
+
+        <label class="file-label premium-upload">
+          <span class="upload-icon">＋</span>
+          <span class="upload-copy">
+            <strong>Attach repair photo</strong>
+            <small>Upload evidence of the fault, damage or completed repair.</small>
+          </span>
+          <input id="repairPhoto" type="file" accept="image/*" />
+        </label>
+
+        <div class="form-actions">
+          <button id="addRepair" class="primary">Create Ticket</button>
+        </div>
+      </div>
     </section>
     <section class="card">
       <h2>Repair Tickets</h2>
