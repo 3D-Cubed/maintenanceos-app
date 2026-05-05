@@ -107,7 +107,7 @@ function renderAuth() {
 
 async function loadData() {
   const [assetResult, repairResult, maintenanceResult] = await Promise.all([
-    supabase.from('assets').select('*').order('created_at', { ascending: false }),
+    supabase.from('assets').select('*').or('archived.is.null,archived.eq.false').order('created_at', { ascending: false }),
     supabase.from('repair_tickets').select('*').order('created_at', { ascending: false }),
     supabase.from('maintenance_tasks').select('*').order('due_date', { ascending: true })
   ])
@@ -285,6 +285,7 @@ async function addAsset() {
     manufacturer: value('#assetManufacturer'),
     model: value('#assetModel'),
     status: value('#assetStatus') || 'Operational',
+    archived: false,
     next_service_date: value('#assetService') || null,
     notes: value('#assetNotes')
   }
@@ -311,6 +312,7 @@ function assetRow(a) {
       </div>
       <div class="row-actions">
         <button onclick="location.hash='asset/${a.id}'">Open</button>
+        <button class="danger subtle" onclick="event.stopPropagation(); window.archiveAsset('${a.id}', '${escapeHtml(a.name || 'this asset')}')">Archive</button>
       </div>
     </div>
   `
@@ -328,7 +330,7 @@ async function renderAssetDetail(id) {
   const qr = await QRCode.toDataURL(qrUrl)
 
   content().innerHTML = `
-    ${renderHeader('ASSET RECORD', escapeHtml(a.name), '<button onclick="location.hash=\'assets\'">Back</button>')}
+    ${renderHeader('ASSET RECORD', escapeHtml(a.name), `<button onclick="location.hash='assets'">Back</button><button class="danger subtle" onclick="window.archiveAsset('${a.id}', '${escapeHtml(a.name || 'this asset')}')">Archive Asset</button>`)}
     <section class="grid two">
       <div class="card">
         <h2>Equipment Details</h2>
@@ -697,6 +699,30 @@ function repairRow(r) {
   `
 }
 
+
+async function archiveAsset(assetId, assetName = 'this asset') {
+  const confirmed = confirm(`Archive ${assetName}?\n\nThis removes it from the active asset list but keeps repair history for reporting.`)
+  if (!confirmed) return
+
+  const { error } = await supabase
+    .from('assets')
+    .update({ archived: true, archived_at: new Date().toISOString() })
+    .eq('id', assetId)
+
+  if (error) {
+    toast(error.message || 'Could not archive asset.', 'error')
+    return
+  }
+
+  await audit('asset_archived', 'assets', assetName)
+  toast('Asset archived.', 'success')
+  await loadData()
+  if (location.hash.startsWith('#asset/')) location.hash = 'assets'
+  else renderAssets()
+}
+
+window.archiveAsset = archiveAsset
+
 function renderMaintenance() {
   const today = new Date().toISOString().slice(0, 10)
   content().innerHTML = `
@@ -756,17 +782,162 @@ async function renderQR() {
 function renderReports() {
   const totalCost = repairs.reduce((sum, r) => sum + Number(r.cost || 0), 0)
   const downtime = repairs.reduce((sum, r) => sum + Number(r.downtime_hours || 0), 0)
+  const monthly = buildMonthlyReportData(repairs)
+  const topAssets = buildTopFaultAssets(repairs, assets)
+  const openCount = repairs.filter(r => r.status !== 'Resolved').length
+  const resolvedCount = repairs.filter(r => r.status === 'Resolved').length
+
   content().innerHTML = `
     ${renderHeader('REPORTING', 'Reports')}
     <section class="stats-grid">
-      ${statCard('Total Assets', assets.length, 'Registered equipment')}
+      ${statCard('Total Assets', assets.length, 'Active registered equipment')}
       ${statCard('Repair Tickets', repairs.length, 'All tickets')}
-      ${statCard('Overdue Repairs', repairs.filter(r => getRepairHealth(r).state === 'overdue').length, 'SLA exceeded')}
+      ${statCard('Open Repairs', openCount, 'Tickets not resolved')}
       ${statCard('Repair Cost', `£${totalCost.toFixed(2)}`, 'Logged repair spend')}
       ${statCard('Downtime', `${downtime.toFixed(1)}h`, 'Logged machine downtime')}
     </section>
+
+    <section class="report-grid">
+      <div class="card report-card">
+        <div class="section-title-row">
+          <div>
+            <h2>Monthly Downtime Trend</h2>
+            <p class="muted">Used by management to check whether maintenance activity is reducing lost operating time.</p>
+          </div>
+        </div>
+        ${lineChartSvg(monthly.labels, monthly.downtime, 'Downtime hours')}
+      </div>
+
+      <div class="card report-card">
+        <div class="section-title-row">
+          <div>
+            <h2>Monthly Ticket Trend</h2>
+            <p class="muted">Tracks whether the number of faults being raised is reducing over time.</p>
+          </div>
+        </div>
+        ${lineChartSvg(monthly.labels, monthly.tickets, 'Tickets raised')}
+      </div>
+
+      <div class="card report-card">
+        <h2>Open vs Resolved</h2>
+        <p class="muted">Snapshot of current repair control health.</p>
+        ${barList([
+          { label: 'Open', value: openCount, tone: 'warning' },
+          { label: 'Resolved', value: resolvedCount, tone: 'ok' }
+        ])}
+      </div>
+
+      <div class="card report-card">
+        <h2>Top Fault Assets</h2>
+        <p class="muted">Assets generating the highest number of tickets.</p>
+        ${barList(topAssets.length ? topAssets : [{ label: 'No ticket data yet', value: 0, tone: 'ok' }])}
+      </div>
+    </section>
   `
 }
+
+function buildMonthlyReportData(repairRows) {
+  const months = []
+  const now = new Date()
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    months.push({
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+      label: d.toLocaleString(undefined, { month: 'short' }),
+      tickets: 0,
+      downtime: 0
+    })
+  }
+
+  const byKey = Object.fromEntries(months.map(m => [m.key, m]))
+  repairRows.forEach(r => {
+    if (!r.created_at) return
+    const d = new Date(r.created_at)
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    if (!byKey[key]) return
+    byKey[key].tickets += 1
+    byKey[key].downtime += Number(r.downtime_hours || 0)
+  })
+
+  return {
+    labels: months.map(m => m.label),
+    tickets: months.map(m => m.tickets),
+    downtime: months.map(m => Number(m.downtime.toFixed(1)))
+  }
+}
+
+function buildTopFaultAssets(repairRows, assetRows) {
+  const counts = {}
+  repairRows.forEach(r => {
+    if (!r.asset_id) return
+    counts[r.asset_id] = (counts[r.asset_id] || 0) + 1
+  })
+  return Object.entries(counts)
+    .map(([assetId, value]) => ({
+      label: assetRows.find(a => a.id === assetId)?.name || 'Unknown Asset',
+      value,
+      tone: value >= 3 ? 'danger' : value >= 2 ? 'warning' : 'ok'
+    }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 5)
+}
+
+function lineChartSvg(labels, values, title) {
+  const w = 640
+  const h = 240
+  const pad = 38
+  const max = Math.max(...values, 1)
+  const points = values.map((v, i) => {
+    const x = pad + (i * (w - pad * 2)) / Math.max(values.length - 1, 1)
+    const y = h - pad - (Number(v) / max) * (h - pad * 2)
+    return { x, y, v }
+  })
+  const polyline = points.map(p => `${p.x},${p.y}`).join(' ')
+  const area = `${pad},${h - pad} ${polyline} ${w - pad},${h - pad}`
+
+  return `
+    <div class="chart-wrap" role="img" aria-label="${escapeHtml(title)} chart">
+      <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="chartGlow" x1="0" x2="1">
+            <stop offset="0" stop-color="#24e2aa" stop-opacity="0.72" />
+            <stop offset="1" stop-color="#5db6ff" stop-opacity="0.72" />
+          </linearGradient>
+          <linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0" stop-color="#24e2aa" stop-opacity="0.20" />
+            <stop offset="1" stop-color="#5db6ff" stop-opacity="0.00" />
+          </linearGradient>
+        </defs>
+        <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" class="chart-axis" />
+        <polygon points="${area}" fill="url(#chartFill)"></polygon>
+        <polyline points="${polyline}" fill="none" stroke="url(#chartGlow)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></polyline>
+        ${points.map(p => `<circle cx="${p.x}" cy="${p.y}" r="6" class="chart-dot"><title>${p.v}</title></circle>`).join('')}
+        ${labels.map((label, i) => {
+          const x = pad + (i * (w - pad * 2)) / Math.max(labels.length - 1, 1)
+          return `<text x="${x}" y="${h - 10}" text-anchor="middle" class="chart-label">${escapeHtml(label)}</text>`
+        }).join('')}
+      </svg>
+      <div class="chart-values">
+        ${labels.map((label, i) => `<span><b>${escapeHtml(String(values[i]))}</b><small>${escapeHtml(label)}</small></span>`).join('')}
+      </div>
+    </div>
+  `
+}
+
+function barList(items) {
+  const max = Math.max(...items.map(i => Number(i.value) || 0), 1)
+  return `
+    <div class="bar-list">
+      ${items.map(item => `
+        <div class="bar-row ${item.tone || ''}">
+          <div class="bar-meta"><span>${escapeHtml(item.label)}</span><b>${escapeHtml(String(item.value))}</b></div>
+          <div class="bar-track"><div class="bar-fill" style="width:${Math.max(4, (Number(item.value) || 0) / max * 100)}%"></div></div>
+        </div>
+      `).join('')}
+    </div>
+  `
+}
+
 
 window.resolveRepair = resolveRepair
 
