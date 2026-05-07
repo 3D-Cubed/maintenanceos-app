@@ -21,19 +21,23 @@ const slaHours = { Low: 168, Medium: 72, High: 24, Critical: 8 }
 init()
 
 async function init() {
-  const { data, error } = await supabase.auth.getSession()
-  if (error) console.warn(error.message)
-  session = data?.session || null
-
   window.addEventListener('hashchange', handleRoute)
 
-  if (!session) {
+  // V15 development entry mode: authentication is temporarily bypassed.
+  // The splash screen is still shown, but users enter the platform with a single button.
+  // V15 development entry mode: always show the entry screen per browser session.
+  // Clear any older persistent flag so a cached localStorage value cannot bypass or blank the landing screen.
+  localStorage.removeItem('maintenanceos_entered')
+  const hasEntered = sessionStorage.getItem('maintenanceos_entered') === 'true'
+  if (!hasEntered) {
     renderAuth()
     return
   }
 
-  await loadData()
+  session = { user: { email: 'development@maintenanceos.local' } }
   handleRoute()
+  await loadData()
+  renderPage()
 }
 
 function showMessage(message, type = 'info') {
@@ -45,80 +49,51 @@ function showMessage(message, type = 'info') {
 
 function renderAuth() {
   app.innerHTML = `
-    <section class="auth-page">
-      <div class="auth-card glass">
-        <div class="brand-lockup">
-          <div class="orb"></div>
+    <section class="auth-page entry-page">
+      <div class="auth-card entry-card glass">
+        <div class="brand-lockup entry-brand">
+          <div class="orb entry-orb"></div>
           <div>
-            <h1>Medstrom Asset Management</h1>
-            <p>Secure access required.</p>
+            <h1>MaintenanceOS</h1>
+            <p>Intelligent maintenance platform</p>
           </div>
         </div>
-        <div id="messageBox" class="message hidden"></div>
-        <input id="email" type="email" placeholder="Email" autocomplete="email" />
-        <input id="password" type="password" placeholder="Password" autocomplete="current-password" />
-        <button id="authAction" class="primary">Log in</button>
-        <button id="authToggle" class="ghost">Need an account? Sign up</button>
+        <button id="enterPlatform" class="primary entry-button">Enter</button>
       </div>
     </section>
   `
 
-  let signupMode = false
-  const action = document.querySelector('#authAction')
-  const toggle = document.querySelector('#authToggle')
-
-  toggle.addEventListener('click', () => {
-    signupMode = !signupMode
-    action.textContent = signupMode ? 'Create account' : 'Log in'
-    toggle.textContent = signupMode ? 'Already have an account? Log in' : 'Need an account? Sign up'
-    showMessage('', 'hidden')
-  })
-
-  action.addEventListener('click', async () => {
-    const email = document.querySelector('#email').value.trim()
-    const password = document.querySelector('#password').value.trim()
-
-    if (!email || !password) return showMessage('Enter an email and password.', 'error')
-    if (password.length < 6) return showMessage('Password must be at least 6 characters.', 'error')
-
-    action.disabled = true
-    action.textContent = signupMode ? 'Creating account...' : 'Logging in...'
-
-    const result = signupMode
-      ? await supabase.auth.signUp({ email, password })
-      : await supabase.auth.signInWithPassword({ email, password })
-
-    action.disabled = false
-    action.textContent = signupMode ? 'Create account' : 'Log in'
-
-    if (result.error) return showMessage(result.error.message, 'error')
-
-    if (signupMode && !result.data.session) {
-      showMessage('Account created. Check your email if confirmation is enabled, then log in.', 'success')
-      signupMode = false
-      action.textContent = 'Log in'
-      toggle.textContent = 'Need an account? Sign up'
-      return
-    }
-
-    location.reload()
+  document.querySelector('#enterPlatform').addEventListener('click', async () => {
+    sessionStorage.setItem('maintenanceos_entered', 'true')
+    session = { user: { email: 'development@maintenanceos.local' } }
+    location.hash = location.hash || 'dashboard'
+    handleRoute()
+    await loadData()
+    renderPage()
   })
 }
 
 async function loadData() {
-  const [assetResult, repairResult, maintenanceResult] = await Promise.all([
-    supabase.from('assets').select('*').or('archived.is.null,archived.eq.false').order('created_at', { ascending: false }),
-    supabase.from('repair_tickets').select('*').order('created_at', { ascending: false }),
-    supabase.from('maintenance_tasks').select('*').order('due_date', { ascending: true })
-  ])
+  try {
+    const [assetResult, repairResult, maintenanceResult] = await Promise.all([
+      supabase.from('assets').select('*').or('archived.is.null,archived.eq.false').order('created_at', { ascending: false }),
+      supabase.from('repair_tickets').select('*').order('created_at', { ascending: false }),
+      supabase.from('maintenance_tasks').select('*').order('due_date', { ascending: true })
+    ])
 
-  if (assetResult.error) console.warn(assetResult.error.message)
-  if (repairResult.error) console.warn(repairResult.error.message)
-  if (maintenanceResult.error && !maintenanceResult.error.message.includes('maintenance_tasks')) console.warn(maintenanceResult.error.message)
+    if (assetResult.error) console.warn(assetResult.error.message)
+    if (repairResult.error) console.warn(repairResult.error.message)
+    if (maintenanceResult.error && !maintenanceResult.error.message.includes('maintenance_tasks')) console.warn(maintenanceResult.error.message)
 
-  assets = assetResult.data || []
-  repairs = repairResult.data || []
-  maintenance = maintenanceResult.data || []
+    assets = assetResult.data || []
+    repairs = repairResult.data || []
+    maintenance = maintenanceResult.data || []
+  } catch (err) {
+    console.warn('Data load skipped:', err?.message || err)
+    assets = []
+    repairs = []
+    maintenance = []
+  }
 }
 
 function handleRoute() {
@@ -150,7 +125,7 @@ function renderShell(withSidebar = true) {
         ${navButton('maintenance', 'Maintenance')}
         ${navButton('qr', 'QR Labels')}
         ${navButton('reports', 'Reports')}
-        <button id="logout" class="nav danger">Log out</button>
+        <button id="logout" class="nav danger">Exit</button>
       </aside>` : ''}
     <main class="main ${withSidebar ? '' : 'full'}">
       <div id="content"></div>
@@ -164,7 +139,8 @@ function renderShell(withSidebar = true) {
       })
     })
     document.querySelector('#logout').addEventListener('click', async () => {
-      await supabase.auth.signOut()
+      sessionStorage.removeItem('maintenanceos_entered')
+      localStorage.removeItem('maintenanceos_entered')
       location.hash = ''
       location.reload()
     })
