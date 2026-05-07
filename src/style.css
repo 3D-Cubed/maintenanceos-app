@@ -780,64 +780,15 @@ button.subtle {
   .chart-values { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
-/* V15 entry screen update - credential-free development entry */
-.entry-page {
-  background:
-    radial-gradient(circle at 18% 16%, rgba(24, 245, 168, 0.17), transparent 34%),
-    radial-gradient(circle at 82% 78%, rgba(93, 182, 255, 0.12), transparent 38%),
-    linear-gradient(135deg, #03110f, #06101c 58%, #02050a);
-}
-
-.entry-card {
-  width: min(560px, 92vw);
-  padding: 46px 42px 42px;
-  gap: 34px;
-  position: relative;
-  overflow: hidden;
-}
-
-.entry-card::before {
+/* V15C Maintenance Hub entry refinements */
+.hub-entry-card { position: relative; overflow: hidden; }
+.hub-entry-card::before {
   content: "";
   position: absolute;
   inset: -40%;
-  background: radial-gradient(circle at 35% 45%, rgba(25, 245, 168, 0.13), transparent 32%);
+  background: radial-gradient(circle at 20% 20%, rgba(35,230,160,.20), transparent 28%), radial-gradient(circle at 80% 0%, rgba(93,182,255,.12), transparent 30%);
   pointer-events: none;
 }
-
-.entry-brand {
-  position: relative;
-  align-items: center;
-  gap: 22px;
-}
-
-.entry-orb {
-  width: 28px;
-  height: 54px;
-  border-radius: 999px;
-  flex: 0 0 auto;
-}
-
-.entry-brand h1 {
-  font-size: clamp(3rem, 7vw, 5.4rem);
-  letter-spacing: -0.055em;
-  text-wrap: balance;
-}
-
-.entry-brand p {
-  margin: 20px 0 0;
-  color: #bffff2;
-  font-size: clamp(1.05rem, 2vw, 1.35rem);
-}
-
-.entry-button {
-  position: relative;
-  width: 100%;
-  min-height: 64px;
-  font-size: 1.15rem;
-  letter-spacing: 0.02em;
-  box-shadow: 0 18px 50px rgba(36, 226, 170, 0.14);
-}
-
-.entry-button:hover {
-  box-shadow: 0 22px 70px rgba(36, 226, 170, 0.22);
-}
+.hub-entry-card > * { position: relative; z-index: 1; }
+.hub-lockup { align-items: flex-start; }
+.enter-button { font-size: 1.05rem; padding: 16px 22px; }

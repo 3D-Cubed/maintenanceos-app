@@ -21,23 +21,19 @@ const slaHours = { Low: 168, Medium: 72, High: 24, Critical: 8 }
 init()
 
 async function init() {
+  const { data, error } = await supabase.auth.getSession()
+  if (error) console.warn(error.message)
+  session = data?.session || null
+
   window.addEventListener('hashchange', handleRoute)
 
-  // V15 development entry mode: authentication is temporarily bypassed.
-  // The splash screen is still shown, but users enter the platform with a single button.
-  // V15 development entry mode: always show the entry screen per browser session.
-  // Clear any older persistent flag so a cached localStorage value cannot bypass or blank the landing screen.
-  localStorage.removeItem('maintenanceos_entered')
-  const hasEntered = sessionStorage.getItem('maintenanceos_entered') === 'true'
-  if (!hasEntered) {
+  if (!session) {
     renderAuth()
     return
   }
 
-  session = { user: { email: 'development@maintenanceos.local' } }
-  handleRoute()
   await loadData()
-  renderPage()
+  handleRoute()
 }
 
 function showMessage(message, type = 'info') {
@@ -49,51 +45,64 @@ function showMessage(message, type = 'info') {
 
 function renderAuth() {
   app.innerHTML = `
-    <section class="auth-page entry-page">
-      <div class="auth-card entry-card glass">
-        <div class="brand-lockup entry-brand">
-          <div class="orb entry-orb"></div>
+    <section class="auth-page">
+      <div class="auth-card glass hub-entry-card">
+        <div class="brand-lockup hub-lockup">
+          <div class="orb"></div>
           <div>
-            <h1>MaintenanceOS</h1>
+            <p class="eyebrow">MEDSTROM ENGINEERING</p>
+            <h1>Maintenance Hub</h1>
             <p>Intelligent maintenance platform</p>
           </div>
         </div>
-        <button id="enterPlatform" class="primary entry-button">Enter</button>
+        <div id="messageBox" class="message hidden"></div>
+        <button id="authAction" class="primary enter-button">Enter</button>
+        <small class="muted">Secure Supabase session starts automatically in the background.</small>
       </div>
     </section>
   `
 
-  document.querySelector('#enterPlatform').addEventListener('click', async () => {
-    sessionStorage.setItem('maintenanceos_entered', 'true')
-    session = { user: { email: 'development@maintenanceos.local' } }
+  const action = document.querySelector('#authAction')
+
+  action.addEventListener('click', async () => {
+    const email = import.meta.env.VITE_MAINTENANCE_GUEST_EMAIL
+    const password = import.meta.env.VITE_MAINTENANCE_GUEST_PASSWORD
+
+    if (!email || !password) {
+      return showMessage('Guest access is not configured. Add VITE_MAINTENANCE_GUEST_EMAIL and VITE_MAINTENANCE_GUEST_PASSWORD to your .env file.', 'error')
+    }
+
+    action.disabled = true
+    action.textContent = 'Entering...'
+
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+
+    action.disabled = false
+    action.textContent = 'Enter'
+
+    if (error) return showMessage(error.message, 'error')
+
+    session = data?.session || null
+    await loadData()
     location.hash = location.hash || 'dashboard'
     handleRoute()
-    await loadData()
-    renderPage()
   })
 }
 
 async function loadData() {
-  try {
-    const [assetResult, repairResult, maintenanceResult] = await Promise.all([
-      supabase.from('assets').select('*').or('archived.is.null,archived.eq.false').order('created_at', { ascending: false }),
-      supabase.from('repair_tickets').select('*').order('created_at', { ascending: false }),
-      supabase.from('maintenance_tasks').select('*').order('due_date', { ascending: true })
-    ])
+  const [assetResult, repairResult, maintenanceResult] = await Promise.all([
+    supabase.from('assets').select('*').or('archived.is.null,archived.eq.false').order('created_at', { ascending: false }),
+    supabase.from('repair_tickets').select('*').order('created_at', { ascending: false }),
+    supabase.from('maintenance_tasks').select('*').order('due_date', { ascending: true })
+  ])
 
-    if (assetResult.error) console.warn(assetResult.error.message)
-    if (repairResult.error) console.warn(repairResult.error.message)
-    if (maintenanceResult.error && !maintenanceResult.error.message.includes('maintenance_tasks')) console.warn(maintenanceResult.error.message)
+  if (assetResult.error) console.warn(assetResult.error.message)
+  if (repairResult.error) console.warn(repairResult.error.message)
+  if (maintenanceResult.error && !maintenanceResult.error.message.includes('maintenance_tasks')) console.warn(maintenanceResult.error.message)
 
-    assets = assetResult.data || []
-    repairs = repairResult.data || []
-    maintenance = maintenanceResult.data || []
-  } catch (err) {
-    console.warn('Data load skipped:', err?.message || err)
-    assets = []
-    repairs = []
-    maintenance = []
-  }
+  assets = assetResult.data || []
+  repairs = repairResult.data || []
+  maintenance = maintenanceResult.data || []
 }
 
 function handleRoute() {
@@ -139,8 +148,7 @@ function renderShell(withSidebar = true) {
       })
     })
     document.querySelector('#logout').addEventListener('click', async () => {
-      sessionStorage.removeItem('maintenanceos_entered')
-      localStorage.removeItem('maintenanceos_entered')
+      await supabase.auth.signOut()
       location.hash = ''
       location.reload()
     })
