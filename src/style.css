@@ -1311,59 +1311,29 @@ body.modal-open { overflow: hidden; }
   .service-plan-head { flex-direction: column; }
 }
 
-/* V17I Asset Intelligence & PDF Reports */
-.asset-intelligence-summary {
-  border-color: rgba(255,198,76,.22);
-  background:
-    radial-gradient(circle at 8% 0%, rgba(255,198,76,.10), transparent 34%),
-    linear-gradient(135deg, rgba(12,31,38,.9), rgba(10,16,28,.88));
-}
-.asset-intel-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-}
-.asset-intel-panel {
-  border: 1px solid rgba(255,255,255,.09);
-  border-radius: 18px;
-  padding: 16px;
-  background: rgba(255,255,255,.04);
-}
-.asset-intel-panel.wide { grid-column: span 2; }
-.asset-intel-panel small {
-  display: block;
-  color: #9bd8d2;
-  text-transform: uppercase;
-  letter-spacing: .08em;
-  font-weight: 900;
-  margin-bottom: 7px;
-}
-.asset-intel-panel strong {
-  display: block;
-  color: #effff9;
-  font-size: 22px;
-  margin-bottom: 4px;
-}
-.asset-intel-panel span,
-.asset-intel-panel p {
-  color: #cceee9;
-  margin: 7px 0 0;
-}
-.asset-intel-panel.upgrade-panel {
-  border-color: rgba(255,198,76,.22);
-  background: rgba(255,198,76,.055);
-}
 .report-btn {
+  width: fit-content;
   margin-top: 10px;
-  padding: 9px 12px;
+  padding: 9px 13px;
   border-radius: 12px;
-  font-size: 12px;
-  color: #03130f;
-  background: linear-gradient(90deg, #baffdf, #7bc8ff);
-  border: 0;
+  border: 1px solid rgba(36, 226, 170, .34);
+  background: linear-gradient(135deg, rgba(36, 226, 170, .18), rgba(93, 182, 255, .13));
+  color: var(--text);
+  font-weight: 900;
+  box-shadow: 0 0 18px rgba(36, 226, 170, .08);
 }
-.service-plan-card .parts-section { display: none; }
-@media (max-width: 900px) {
-  .asset-intel-grid { grid-template-columns: 1fr; }
-  .asset-intel-panel.wide { grid-column: span 1; }
-}
+.report-btn:hover { transform: translateY(-1px); border-color: rgba(93, 182, 255, .65); }
+
+/* V18 engineering intelligence additions */
+.summary-stack { display: grid; gap: 10px; }
+.summary-stack > div { padding: 10px 12px; border-radius: 14px; border: 1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.035); }
+.summary-stack b { display:block; color:#effffb; margin-bottom:4px; }
+.summary-stack span { display:block; color:#b8e7df; font-size: 13px; line-height: 1.35; }
+.compact-readout { grid-template-columns: repeat(4, minmax(0,1fr)); }
+.timeline-item.parts .timeline-dot { background:#24e2aa; box-shadow: 0 0 18px rgba(36,226,170,.45); }
+.timeline-item.parts .timeline-body { border-color: rgba(36,226,170,.26); background: rgba(36,226,170,.045); }
+.timeline-item.downtime .timeline-dot { background:#ffd166; box-shadow: 0 0 18px rgba(255,209,102,.35); }
+.timeline-item.downtime .timeline-body { border-color: rgba(255,209,102,.24); background: rgba(255,209,102,.045); }
+.timeline-item.upgrade .timeline-dot { background:#5db6ff; box-shadow: 0 0 18px rgba(93,182,255,.35); }
+.timeline-item.upgrade .timeline-body { border-color: rgba(93,182,255,.28); background: rgba(93,182,255,.055); }
+.analytics-stats .stat-card b, .analytics-stats .stat-card .stat-value { letter-spacing: -.03em; }

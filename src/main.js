@@ -13,7 +13,7 @@ let partsInventory = []
 let partsUsage = []
 let activePage = 'dashboard'
 let partFilters = { type: 'All', stock: 'All', category: 'All', search: '' }
-let maintenanceFilter = 'All'
+let maintenanceFilter = 'Upcoming'
 let resolveContext = null
 let resolvingTicket = false
 
@@ -525,83 +525,91 @@ function safeJson(value) {
   try { return JSON.parse(value) } catch { return {} }
 }
 
-function assetIntelligenceSummary(asset, assetServices = [], assetRepairs = []) {
-  const latest = assetServices[0]
-  const failedFindings = []
+
+function assetIntelligenceSummary(asset, assetRepairs = [], assetServices = []) {
+  const failedChecks = []
   const upgradeNotes = []
-  const nextServiceNotes = []
-
-  assetServices.slice(0, 8).forEach(record => {
-    const data = typeof record.service_data === 'string' ? safeJson(record.service_data) : (record.service_data || {})
+  assetServices.forEach(service => {
+    const data = typeof service.service_data === 'string' ? safeJson(service.service_data) : (service.service_data || {})
     const findings = data.findings || {}
-    Object.entries(findings).forEach(([key, note]) => {
-      if (note) failedFindings.push(`${humaniseKey(key.replace(/Reason$/, ''))}: ${note}`)
+    Object.entries(data).forEach(([key, value]) => {
+      if (key === 'findings' || !value) return
+      const result = String(value).toLowerCase()
+      const finding = findings[`${key}Reason`] || ''
+      if (['failed','poor','worn','replace','requires attention','minor defects'].some(term => result.includes(term))) {
+        failedChecks.push(`${humaniseKey(key)}: ${value}${finding ? ` — ${finding}` : ''}`)
+      }
     })
-    const upgrades = data.upgradesRequired || data.agvUpgradesRequired || record.upgrades_required || ''
-    if (upgrades) upgradeNotes.push(upgrades)
-    if (record.corrective_action) nextServiceNotes.push(record.corrective_action)
-    if (record.issues_found) nextServiceNotes.push(record.issues_found)
+    if (data.upgradesRequired || service.corrective_action) upgradeNotes.push(data.upgradesRequired || service.corrective_action)
   })
-
-  const recurringRepairTitles = recurringItems(assetRepairs.map(r => r.title || r.description).filter(Boolean))
-  const open = assetRepairs.filter(r => r.status !== 'Resolved')
-
+  const repeatFaults = detectRepeatFaultLabels(assetRepairs)
+  const latestService = assetServices[0]
   return `
-    <div class="asset-intel-grid">
-      <div class="asset-intel-panel">
-        <small>Latest service condition</small>
-        <strong>${escapeHtml(latest?.condition_after || 'No service record yet')}</strong>
-        <span>${escapeHtml(latest ? formatDate(latest.service_date || latest.created_at) : 'Run a service to populate this summary')}</span>
-      </div>
-      <div class="asset-intel-panel">
-        <small>Open engineering actions</small>
-        <strong>${open.length}</strong>
-        <span>${open.length ? 'Active repair tickets require attention' : 'No open repair tickets'}</span>
-      </div>
-      <div class="asset-intel-panel wide">
-        <small>Failed / worn checks from service reports</small>
-        ${failedFindings.slice(0, 4).map(item => `<p>${escapeHtml(item)}</p>`).join('') || '<p class="muted">No failed checks recorded from recent service forms.</p>'}
-      </div>
-      <div class="asset-intel-panel wide upgrade-panel">
-        <small>Recommendations / upgrades for next service</small>
-        ${uniqueList(upgradeNotes).slice(0, 4).map(item => `<p>${escapeHtml(item)}</p>`).join('') || '<p class="muted">No upgrade recommendations recorded for this asset.</p>'}
-      </div>
-      <div class="asset-intel-panel wide">
-        <small>Recurring repair patterns</small>
-        ${recurringRepairTitles.slice(0, 4).map(item => `<p>${escapeHtml(item)}</p>`).join('') || '<p class="muted">No recurring repair pattern detected yet.</p>'}
-      </div>
-      <div class="asset-intel-panel wide">
-        <small>Next-service planning notes</small>
-        ${uniqueList(nextServiceNotes).slice(0, 3).map(item => `<p>${escapeHtml(item)}</p>`).join('') || '<p class="muted">No next-service planning notes recorded.</p>'}
-      </div>
+    <div class="summary-stack">
+      <div><b>Last service</b><span>${latestService ? `${formatDate(latestService.service_date || latestService.created_at)} • ${escapeHtml(latestService.condition_after || 'Recorded')}` : 'No services recorded yet'}</span></div>
+      <div><b>Failed / worn checks</b><span>${escapeHtml(failedChecks.slice(0,2).join(' • ') || 'No failed checks recorded')}</span></div>
+      <div><b>Recurring faults</b><span>${escapeHtml(repeatFaults.slice(0,2).join(' • ') || 'No repeat pattern detected')}</span></div>
+      <div><b>Recommended next actions</b><span>${escapeHtml(upgradeNotes.filter(Boolean).slice(0,2).join(' • ') || 'No upgrade recommendation recorded')}</span></div>
     </div>
   `
 }
 
-function humaniseKey(key = '') {
-  return String(key)
-    .replace(/^agv/i, 'AGV ')
-    .replace(/^printer/i, 'Printer ')
-    .replace(/([A-Z])/g, ' $1')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function uniqueList(items = []) {
-  return [...new Set(items.map(i => String(i || '').trim()).filter(Boolean))]
-}
-
-function recurringItems(items = []) {
-  const normalised = items.map(i => String(i || '').toLowerCase().trim()).filter(Boolean)
-  const counts = {}
-  normalised.forEach(item => {
-    const key = item.slice(0, 80)
-    counts[key] = (counts[key] || 0) + 1
+function detectRepeatFaultLabels(assetRepairs = []) {
+  const buckets = {}
+  assetRepairs.forEach(r => {
+    const key = String(r.title || r.description || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, '')
+      .split(' ')
+      .filter(w => w.length > 4)
+      .slice(0, 3)
+      .join(' ')
+    if (!key) return
+    buckets[key] = (buckets[key] || 0) + 1
   })
-  return Object.entries(counts)
-    .filter(([, count]) => count > 1)
-    .sort((a, b) => b[1] - a[1])
-    .map(([item, count]) => `${item} (${count} repeats)`)
+  return Object.entries(buckets).filter(([,count]) => count > 1).map(([key,count]) => `${key} (${count}×)`)
+}
+
+function assetReliabilitySnapshot(asset, assetRepairs = []) {
+  const resolved = assetRepairs.filter(r => r.status === 'Resolved')
+  const downtime = assetRepairs.reduce((sum, r) => sum + Number(r.downtime_hours || 0), 0)
+  const cost = assetRepairs.reduce((sum, r) => sum + Number(r.cost || 0), 0)
+  const mtbf = calculateMtbfDays(assetRepairs)
+  const health = calculateAssetHealth(asset)
+  return `
+    <div class="intel-readout compact-readout">
+      <div><b>${mtbf ? `${mtbf}d` : '-'}</b><span>MTBF</span></div>
+      <div><b>${downtime.toFixed(1)}h</b><span>Downtime</span></div>
+      <div><b>£${cost.toFixed(2)}</b><span>Cost</span></div>
+      <div><b>${health.score}</b><span>Health</span></div>
+    </div>
+  `
+}
+
+function calculateMtbfDays(assetRepairs = []) {
+  const dates = assetRepairs
+    .map(r => r.created_at)
+    .filter(Boolean)
+    .map(d => new Date(d).getTime())
+    .sort((a,b) => a-b)
+  if (dates.length < 2) return null
+  const gaps = []
+  for (let i=1; i<dates.length; i++) gaps.push((dates[i]-dates[i-1]) / 86400000)
+  const avg = gaps.reduce((a,b)=>a+b,0) / gaps.length
+  return Math.max(1, Math.round(avg))
+}
+
+function partNameFromUsage(usage) {
+  const part = partsInventory.find(p => p.id === usage.part_id)
+  return part?.part_name || usage.notes || 'Part used'
+}
+
+function equipmentPerformanceScore(assetList) {
+  if (!assetList.length) return 0
+  const health = averageHealth(assetList)
+  const faults = repairs.filter(r => assetList.some(a => a.id === r.asset_id) && r.status !== 'Resolved').length
+  const penalty = Math.min(25, faults * 4)
+  return Math.max(0, Math.round(health - penalty))
 }
 
 async function renderAssetDetail(id) {
@@ -631,20 +639,22 @@ async function renderAssetDetail(id) {
         ${recentAssetParts(a.id)}
       </div>
       <div class="card intelligence-card">
-        <h2>Recent Service Findings</h2>
+        <h2>Asset Intelligence Summary</h2>
+        <p class="muted">Previous reports, failed checks and next-service recommendations.</p>
+        ${assetIntelligenceSummary(a, assetRepairs, assetServices)}
+      </div>
+    </section>
+    <section class="grid two">
+      <div class="card intelligence-card">
+        <h2>Service Findings</h2>
         <p class="muted">Latest non-pass inspection notes and actions.</p>
         ${recentServiceFindings(assetServices)}
       </div>
-    </section>
-    <section class="card asset-intelligence-summary">
-      <div class="section-title-row compact">
-        <div>
-          <p class="eyebrow">ASSET INTELLIGENCE</p>
-          <h2>Service Intelligence Summary</h2>
-          <p class="muted">Asset-specific findings pulled from previous service and repair records.</p>
-        </div>
+      <div class="card intelligence-card">
+        <h2>Reliability Snapshot</h2>
+        <p class="muted">Asset-level MTBF, downtime and cost indicators.</p>
+        ${assetReliabilitySnapshot(a, assetRepairs)}
       </div>
-      ${assetIntelligenceSummary(a, assetServices, assetRepairs)}
     </section>
     <section class="grid two">
       <div class="card asset-health-card ${health.tone}">
@@ -1391,11 +1401,11 @@ function renderMaintenance() {
   const today = new Date().toISOString().slice(0, 10)
   const filteredAssets = assets
     .filter(a => {
-      if (maintenanceFilter === 'All') return true
+      if (maintenanceFilter === 'Upcoming') return serviceDaysUntil(a) >= 0 && serviceDaysUntil(a) <= 30
       if (maintenanceFilter === 'Overdue') return isServiceOverdue(a)
       if (maintenanceFilter === 'AGV') return isAgvAsset(a)
       if (maintenanceFilter === '3D Printer') return isPrinterAsset(a)
-      return true
+      return serviceDaysUntil(a) >= 0 && serviceDaysUntil(a) <= 30
     })
     .slice()
     .sort((a, b) => serviceSortScore(a) - serviceSortScore(b))
@@ -1415,30 +1425,30 @@ function renderMaintenance() {
       <div class="section-title-row">
         <div>
           <h2>Service Planning Board</h2>
-          <p class="muted">Upcoming service work, previous findings and upgrade actions from previous reports.</p>
+          <p class="muted">Upcoming work, previous findings and upgrade actions. Asset-specific part recommendations are now shown only inside the asset record intelligence summary.</p>
         </div>
       </div>
+      <section class="grid two maintenance-intel-row">
+        <div class="card service-records-card nested-card">
+          <h2>Recent Service Findings</h2>
+          ${serviceRecords.slice(0, 6).map(serviceRecordRow).join('') || '<p class="muted">No service records yet. Add the optional V16 service_records table to retain full form history.</p>'}
+        </div>
+        <div class="card service-records-card nested-card">
+          <h2>Service Tasks</h2>
+          ${maintenance.map(t => `
+            <div class="data-row">
+              <div>
+                <h3>${escapeHtml(t.title || 'Task')}</h3>
+                <p>${escapeHtml(t.status || 'Open')} • Due: ${escapeHtml(t.due_date || '-')}</p>
+              </div>
+            </div>`).join('') || '<p class="muted">No extra maintenance tasks.</p>'}
+        </div>
+      </section>
       <div class="parts-filter-bar maintenance-filter-bar">
-        ${['All', 'AGV', '3D Printer', 'Overdue'].map(filter => `<button class="filter-pill ${maintenanceFilter === filter ? 'active' : ''}" onclick="window.setMaintenanceFilter('${filter}')">${filter}</button>`).join('')}
+        ${['Upcoming', 'Overdue', 'AGV', '3D Printer'].map(filter => `<button class="filter-pill ${maintenanceFilter === filter ? 'active' : ''}" onclick="window.setMaintenanceFilter('${filter}')">${filter}</button>`).join('')}
       </div>
       <div class="service-plan-grid">
         ${filteredAssets.map(servicePlanningTile).join('') || '<p class="muted">No assets match this maintenance view.</p>'}
-      </div>
-    </section>
-    <section class="grid two">
-      <div class="card service-records-card">
-        <h2>Recent Service Findings</h2>
-        ${serviceRecords.slice(0, 8).map(serviceRecordRow).join('') || '<p class="muted">No service records yet. Add the optional V16 service_records table to retain full form history.</p>'}
-      </div>
-      <div class="card service-records-card">
-        <h2>Maintenance Tasks</h2>
-        ${maintenance.map(t => `
-          <div class="data-row">
-            <div>
-              <h3>${escapeHtml(t.title || 'Task')}</h3>
-              <p>${escapeHtml(t.status || 'Open')} • Due: ${escapeHtml(t.due_date || '-')}</p>
-            </div>
-          </div>`).join('') || '<p class="muted">No extra maintenance tasks.</p>'}
       </div>
     </section>
   `
@@ -2059,47 +2069,48 @@ function renderReports() {
   const topAssets = buildTopFaultAssets(repairs, assets)
   const openCount = repairs.filter(r => r.status !== 'Resolved').length
   const resolvedCount = repairs.filter(r => r.status === 'Resolved').length
+  const agvs = assets.filter(isAgvAsset)
+  const printers = assets.filter(isPrinterAsset)
+  const avgMtbf = averageMtbfDays(assets)
+  const worstCosts = costPerAssetList().slice(0, 5)
 
   content().innerHTML = `
-    ${renderHeader('REPORTING', 'Reports')}
-    <section class="stats-grid">
-      ${statCard('Total Assets', assets.length, 'Active registered equipment')}
-      ${statCard('Repair Tickets', repairs.length, 'All tickets')}
-      ${statCard('Open Repairs', openCount, 'Tickets not resolved')}
-      ${statCard('Repair Cost', `£${totalCost.toFixed(2)}`, 'Logged repair spend')}
+    ${renderHeader('ENGINEERING ANALYTICS', 'Reports')}
+    <section class="stats-grid analytics-stats">
+      ${statCard('MTBF', avgMtbf ? `${avgMtbf}d` : '-', 'Mean time between failures')}
       ${statCard('Downtime', `${downtime.toFixed(1)}h`, 'Logged machine downtime')}
+      ${statCard('Cost / Asset', assets.length ? `£${(totalCost / assets.length).toFixed(2)}` : '£0.00', 'Average repair spend')}
+      ${statCard('Fleet Reliability', `${equipmentPerformanceScore(agvs)}%`, 'AGV scoring')}
+      ${statCard('Printer Performance', `${equipmentPerformanceScore(printers)}%`, '3D printer scoring')}
     </section>
 
     <section class="report-grid">
       <div class="card report-card">
-        <div class="section-title-row">
-          <div>
-            <h2>Monthly Downtime Trend</h2>
-            <p class="muted">Used by management to check whether maintenance activity is reducing lost operating time.</p>
-          </div>
-        </div>
+        <div class="section-title-row"><div><h2>Downtime Trend</h2><p class="muted">Monthly logged downtime across repairs.</p></div></div>
         ${lineChartSvg(monthly.labels, monthly.downtime, 'Downtime hours')}
       </div>
-
       <div class="card report-card">
-        <div class="section-title-row">
-          <div>
-            <h2>Monthly Ticket Trend</h2>
-            <p class="muted">Tracks whether the number of faults being raised is reducing over time.</p>
-          </div>
-        </div>
+        <div class="section-title-row"><div><h2>Failure Trend</h2><p class="muted">Monthly repair ticket volume used for MTBF and reliability tracking.</p></div></div>
         ${lineChartSvg(monthly.labels, monthly.tickets, 'Tickets raised')}
       </div>
-
+      <div class="card report-card">
+        <h2>Cost Per Asset</h2>
+        <p class="muted">Highest repair spend by equipment.</p>
+        ${barList(worstCosts.length ? worstCosts : [{ label: 'No repair cost data yet', value: 0, tone: 'ok' }])}
+      </div>
+      <div class="card report-card">
+        <h2>Fleet Reliability Scoring</h2>
+        <p class="muted">Health minus active fault pressure.</p>
+        ${barList([
+          { label: 'AGV Fleet', value: equipmentPerformanceScore(agvs), tone: equipmentPerformanceScore(agvs) < 60 ? 'danger' : equipmentPerformanceScore(agvs) < 80 ? 'warning' : 'ok' },
+          { label: '3D Printer Fleet', value: equipmentPerformanceScore(printers), tone: equipmentPerformanceScore(printers) < 60 ? 'danger' : equipmentPerformanceScore(printers) < 80 ? 'warning' : 'ok' }
+        ])}
+      </div>
       <div class="card report-card">
         <h2>Open vs Resolved</h2>
         <p class="muted">Snapshot of current repair control health.</p>
-        ${barList([
-          { label: 'Open', value: openCount, tone: 'warning' },
-          { label: 'Resolved', value: resolvedCount, tone: 'ok' }
-        ])}
+        ${barList([{ label: 'Open', value: openCount, tone: 'warning' }, { label: 'Resolved', value: resolvedCount, tone: 'ok' }])}
       </div>
-
       <div class="card report-card">
         <h2>Top Fault Assets</h2>
         <p class="muted">Assets generating the highest number of tickets.</p>
@@ -2107,6 +2118,19 @@ function renderReports() {
       </div>
     </section>
   `
+}
+
+function averageMtbfDays(assetRows = []) {
+  const values = assetRows.map(a => calculateMtbfDays(repairs.filter(r => r.asset_id === a.id))).filter(Boolean)
+  if (!values.length) return null
+  return Math.round(values.reduce((a,b)=>a+b,0) / values.length)
+}
+
+function costPerAssetList() {
+  return assets.map(asset => {
+    const total = repairs.filter(r => r.asset_id === asset.id).reduce((sum, r) => sum + Number(r.cost || 0), 0)
+    return { label: asset.name || 'Unknown asset', value: Number(total.toFixed(2)), tone: total > 100 ? 'warning' : 'ok' }
+  }).filter(i => i.value > 0).sort((a,b)=>b.value-a.value)
 }
 
 function buildMonthlyReportData(repairRows) {
@@ -2213,75 +2237,119 @@ function barList(items) {
 
 
 
-function generateMaintenanceReport(type, id) {
+async function generateMaintenanceReport(type, id) {
   const record = type === 'service'
     ? serviceRecords.find(item => item.id === id)
     : repairs.find(item => item.id === id)
   if (!record) return toast('Report record not found.', 'error')
   const asset = assets.find(a => a.id === record.asset_id) || { name: record.asset_name || 'Unknown asset' }
-  const html = type === 'service' ? serviceReportHtml(record, asset) : repairReportHtml(record, asset)
+  const assetUrl = asset.id ? `${location.origin}${location.pathname}#asset/${asset.id}` : ''
+  let qrDataUrl = ''
+  try {
+    if (assetUrl) qrDataUrl = await QRCode.toDataURL(assetUrl, { margin: 1, width: 120 })
+  } catch (err) {
+    console.warn('QR generation skipped:', err.message)
+  }
+  const html = type === 'service'
+    ? serviceReportHtml(record, asset, { qrDataUrl, assetUrl })
+    : repairReportHtml(record, asset, { qrDataUrl, assetUrl })
   openPrintReport(html)
 }
 
-function serviceReportHtml(record, asset) {
+function serviceReportHtml(record, asset, context = {}) {
   const data = typeof record.service_data === 'string' ? safeJson(record.service_data) : (record.service_data || {})
   const findings = data.findings || {}
   const checkRows = Object.entries(data)
     .filter(([key]) => key !== 'findings')
-    .map(([key, value]) => `<tr><th>${escapeHtml(humaniseKey(key))}</th><td>${escapeHtml(value || '-')}</td><td>${escapeHtml(findings[`${key}Reason`] || '')}</td></tr>`)
+    .map(([key, value]) => `<tr><th>${escapeHtml(humaniseKey(key))}</th><td>${escapeHtml(value || '-')}</td><td>${escapeHtml(findings[`${key}Reason`] || '-')}</td></tr>`)
     .join('')
-  return reportShell('Service Report', asset, `
-    <section><h2>Service Details</h2>
-      <div class="report-grid">
-        ${reportField('Service type', record.service_type)}
-        ${reportField('Engineer', record.engineer_name)}
-        ${reportField('Service date', formatDate(record.service_date || record.created_at))}
-        ${reportField('Next service due', formatDate(record.next_service_due))}
-        ${reportField('Condition after service', record.condition_after)}
-        ${reportField('Downtime hours', record.downtime_hours)}
-      </div>
-    </section>
-    <section><h2>Inspection Checks</h2>
-      <table><thead><tr><th>Check</th><th>Result</th><th>Failure / action note</th></tr></thead><tbody>${checkRows || '<tr><td colspan="3">No structured checks recorded.</td></tr>'}</tbody></table>
-    </section>
-    <section><h2>Engineering Notes</h2>
-      ${reportText('Issues found', record.issues_found)}
-      ${reportText('Corrective action', record.corrective_action)}
-      ${reportText('Parts replaced / used', record.parts_replaced)}
-    </section>
-  `)
+
+  return reportShell('Service Report', asset, {
+    status: record.condition_after || 'Completed',
+    reference: reportReference('SRV', record.id || record.created_at),
+    qrDataUrl: context.qrDataUrl,
+    assetUrl: context.assetUrl,
+    body: `
+      <section class="report-section"><h2><span class="section-icon"></span> Service Details</h2>
+        <div class="report-grid">
+          ${reportField('Service type', record.service_type)}
+          ${reportField('Engineer', record.engineer_name)}
+          ${reportField('Service date', formatDate(record.service_date || record.created_at))}
+          ${reportField('Next service due', formatDate(record.next_service_due))}
+          ${reportField('Condition after service', record.condition_after)}
+          ${reportField('Downtime hours', record.downtime_hours)}
+        </div>
+      </section>
+      <section class="report-section"><h2><span class="section-icon"></span> Inspection Checks</h2>
+        <table><thead><tr><th>Check</th><th>Result</th><th>Finding / action note</th></tr></thead><tbody>${checkRows || '<tr><td colspan="3">No structured checks recorded.</td></tr>'}</tbody></table>
+      </section>
+      <section class="report-section"><h2><span class="section-icon"></span> Engineering Notes</h2>
+        ${reportText('Issues found', record.issues_found)}
+        ${reportText('Corrective action', record.corrective_action)}
+        ${reportText('Parts replaced / used', record.parts_replaced)}
+      </section>
+      <section class="report-section notes-section"><h2><span class="section-icon"></span> Notes / Recommendations</h2><div class="notes-box"></div></section>`
+  })
 }
 
-function repairReportHtml(record, asset) {
-  return reportShell('Repair Report', asset, `
-    <section><h2>Repair Details</h2>
-      <div class="report-grid">
-        ${reportField('Fault title', record.title)}
-        ${reportField('Priority', record.priority)}
-        ${reportField('Status', record.status)}
-        ${reportField('Opened', formatDate(record.created_at))}
-        ${reportField('Resolved', formatDate(record.resolved_at))}
-        ${reportField('Downtime hours', record.downtime_hours)}
-        ${reportField('Cost', record.cost ? `£${Number(record.cost).toFixed(2)}` : '-')}
-      </div>
-    </section>
-    <section><h2>Fault & Resolution</h2>
-      ${reportText('Fault description', record.description)}
-      ${reportText('Resolution notes', record.resolution_notes)}
-      ${reportText('Parts used', record.parts_used)}
-    </section>
-    ${record.photo_url ? `<section><h2>Attached Evidence</h2><img class="report-photo" src="${escapeHtml(record.photo_url)}" /></section>` : ''}
-  `)
+function repairReportHtml(record, asset, context = {}) {
+  return reportShell('Repair Report', asset, {
+    status: record.status || 'Open',
+    reference: reportReference('REP', record.id || record.created_at),
+    qrDataUrl: context.qrDataUrl,
+    assetUrl: context.assetUrl,
+    body: `
+      <section class="report-section"><h2><span class="section-icon"></span> Repair Details</h2>
+        <div class="report-grid">
+          ${reportField('Fault title', record.title)}
+          ${reportField('Priority', record.priority)}
+          ${reportField('Status', record.status)}
+          ${reportField('Opened', formatDate(record.created_at))}
+          ${reportField('Resolved', formatDate(record.resolved_at))}
+          ${reportField('Downtime hours', record.downtime_hours)}
+          ${reportField('Cost', record.cost ? `£${Number(record.cost).toFixed(2)}` : '-')}
+        </div>
+      </section>
+      <section class="report-section"><h2><span class="section-icon"></span> Fault & Resolution</h2>
+        ${reportText('Fault description', record.description)}
+        ${reportText('Resolution notes', record.resolution_notes)}
+        ${reportText('Parts used', record.parts_used, true)}
+      </section>
+      ${record.photo_url ? `<section class="report-section"><h2><span class="section-icon"></span> Attached Evidence</h2><img class="report-photo" src="${escapeHtml(record.photo_url)}" /></section>` : ''}
+      <section class="report-section notes-section"><h2><span class="section-icon"></span> Notes / Recommendations</h2><div class="notes-box"></div></section>`
+  })
 }
 
-function reportShell(title, asset, body) {
+function statusTone(status = '') {
+  const value = String(status).toLowerCase()
+  if (value.includes('resolved') || value.includes('complete') || value.includes('good') || value.includes('operational')) return 'ok'
+  if (value.includes('critical') || value.includes('failed') || value.includes('overdue') || value.includes('out of service')) return 'danger'
+  if (value.includes('repair') || value.includes('attention') || value.includes('watch') || value.includes('worn')) return 'warning'
+  return 'neutral'
+}
+
+function reportShell(title, asset, options = {}) {
   const now = new Date().toLocaleString()
+  const status = options.status || asset.status || 'Recorded'
+  const reference = options.reference || reportReference('MOS', Date.now())
+  const body = options.body || ''
+  const tone = statusTone(status)
+  const qr = options.qrDataUrl ? `<div class="qr-card-report"><img src="${options.qrDataUrl}" alt="Asset QR code" /><span>Scan to view asset</span></div>` : ''
+  const partsNote = title === 'Service Report'
+    ? '<span>Equipment-specific service document</span>'
+    : '<span>Engineering repair record</span>'
   return `<!doctype html><html><head><title>${escapeHtml(title)}</title><style>
-    body{font-family:Arial,sans-serif;color:#101820;margin:36px;line-height:1.45}header{border-bottom:3px solid #0b6b58;padding-bottom:16px;margin-bottom:24px}h1{margin:0;font-size:30px}h2{color:#0b6b58;margin-top:24px}.meta{color:#53636a}.report-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.field{border:1px solid #d8e1e4;border-radius:10px;padding:10px}.field small{display:block;color:#53636a;text-transform:uppercase;font-weight:bold;font-size:10px}.field b{display:block;margin-top:4px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border:1px solid #d8e1e4;padding:8px;text-align:left;vertical-align:top}th{background:#eef7f5}.text-block{border:1px solid #d8e1e4;border-radius:10px;padding:10px;margin:10px 0}.signature{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:42px}.sig-line{border-top:1px solid #333;padding-top:8px}.report-photo{max-width:360px;border:1px solid #ddd;border-radius:8px}@media print{button{display:none}body{margin:20mm}}
-  </style></head><body><header><p class="meta">MaintenanceOS • Medstrom Engineering</p><h1>${escapeHtml(title)}</h1><p class="meta">Generated: ${escapeHtml(now)}</p></header>
-  <section><h2>Asset</h2><div class="report-grid">
-    ${reportField('Asset name', asset.name)}${reportField('Type', asset.type)}${reportField('Location', asset.location)}${reportField('Serial', asset.serial_number)}${reportField('Status', asset.status)}${reportField('Model', asset.model)}
-  </div></section>${body}<section class="signature"><div class="sig-line">Engineer signature</div><div class="sig-line">Approved by / date</div></section><script>window.onload=()=>setTimeout(()=>window.print(),250)</script></body></html>`
+    :root{--navy:#06121e;--navy2:#092338;--teal:#21e6c1;--cyan:#54bfff;--ink:#0e2230;--muted:#5d717c;--line:#d9e7e8;--soft:#f7fbfb;--ok:#22c984;--warn:#f6bd4f;--danger:#ff6475;}
+    *{box-sizing:border-box}html,body{margin:0;padding:0}body{font-family:Arial,Helvetica,sans-serif;background:#303030;color:var(--ink);font-size:12px;line-height:1.42}.print-action{position:fixed;right:18px;top:18px;z-index:20;border:0;border-radius:12px;padding:11px 16px;font-weight:900;color:#03131b;background:linear-gradient(90deg,var(--teal),var(--cyan));box-shadow:0 12px 36px rgba(0,0,0,.25);cursor:pointer}.page{width:210mm;min-height:297mm;margin:0 auto 8mm;background:#fff;position:relative;overflow:hidden;box-shadow:0 14px 44px rgba(0,0,0,.38)}.page::before{content:"";position:absolute;inset:0;background:radial-gradient(circle at 12% 2%,rgba(33,230,193,.06),transparent 30%),linear-gradient(90deg,rgba(6,18,30,.025) 1px,transparent 1px),linear-gradient(rgba(6,18,30,.018) 1px,transparent 1px);background-size:auto,18px 18px,18px 18px;pointer-events:none}.top-strip{height:21mm;background:radial-gradient(circle at 20% 0%,rgba(33,230,193,.22),transparent 38%),linear-gradient(135deg,var(--navy),var(--navy2));border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between;padding:0 14mm;color:#fff;position:relative;z-index:1}.brand{font-size:13px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}.brand span{color:var(--teal)}.brand small{margin-left:8px;font-weight:700;letter-spacing:.01em;text-transform:none;color:#d4e6e9}.ref{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:#b8cad0;text-align:right}.ref b{display:block;color:var(--teal);font-size:15px;letter-spacing:.04em;margin-top:2px}.hero{padding:10mm 14mm 9mm;display:grid;grid-template-columns:1fr auto;gap:12mm;border-bottom:1px solid #edf3f4;position:relative;z-index:1}.hero h1{margin:0 0 9mm;color:#0d2230;font-size:34px;letter-spacing:-.04em;line-height:1}.hero-meta{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14mm}.hero-meta small,.field small,.text-block strong{display:block;color:#078c95;font-size:8px;letter-spacing:.08em;text-transform:uppercase;font-weight:900}.hero-meta b{display:block;margin-top:3px;font-size:13.5px}.hero-meta span{display:block;margin-top:2px;color:#203744;font-weight:700}.qr-card-report{text-align:center;margin-top:-12mm}.qr-card-report img{width:25mm;height:25mm;padding:2px;border:1px solid var(--line);border-radius:5px;background:#fff}.qr-card-report span{display:block;margin-top:2mm;color:#3e535c;font-size:9px}.status-badge{display:inline-flex;align-items:center;gap:6px;border-radius:8px;padding:5px 9px;font-weight:900;border:1px solid #b8dfd2;background:#e9f8f2;color:#126f49}.status-badge.warning{background:#fff4d9;border-color:#f2cf79;color:#775000}.status-badge.danger{background:#ffe5e8;border-color:#ff9ba7;color:#8d1724}.status-badge.neutral{background:#eef5f7;border-color:#d4e1e5;color:#304b57}.content{padding:8mm 14mm 18mm;position:relative;z-index:1}.report-section{margin:0 0 7.5mm;break-inside:avoid}.report-section h2{font-size:19px;line-height:1;margin:0 0 4mm;color:#132c39;border-bottom:2px solid var(--teal);padding-bottom:2.4mm;display:flex;align-items:center;gap:8px}.section-icon{display:inline-grid;place-items:center;width:18px;height:18px;border:2px solid var(--teal);border-radius:5px;color:var(--teal);font-size:0}.section-icon::after{content:"";width:8px;height:8px;border-radius:2px;background:var(--teal);box-shadow:0 0 10px rgba(33,230,193,.35)}.report-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.field{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:linear-gradient(180deg,#fff,var(--soft));min-height:52px;break-inside:avoid}.field b{display:block;margin-top:5px;font-size:12.5px;word-break:break-word}.text-block{border:1px solid var(--line);border-radius:8px;padding:9px 10px;margin:7px 0;background:#fff;break-inside:avoid}.text-block p{margin:5px 0 0;font-size:12px}table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border:1px solid var(--line);border-radius:8px;font-size:11.5px}th,td{padding:8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}tr:last-child td{border-bottom:0}th{background:linear-gradient(135deg,var(--navy),var(--navy2));color:#fff;font-size:9px;text-transform:uppercase;letter-spacing:.06em}td{background:#fff}.notes-box{height:26mm;border:1px solid var(--line);border-radius:8px;background:linear-gradient(180deg,#fff,#fbffff)}.report-photo{max-width:100%;border:1px solid var(--line);border-radius:10px}.footer{position:absolute;left:0;right:0;bottom:0;height:13mm;background:linear-gradient(135deg,var(--navy),var(--navy2));border-top:2px solid var(--teal);display:flex;align-items:center;justify-content:space-between;padding:0 14mm;color:#d7eef0;font-size:9px}.footer b{color:var(--teal)}.footer .subtle{color:#98abb3}@page{size:A4;margin:0}@media print{body{background:white}.page{margin:0;box-shadow:none;page-break-after:auto}.print-action{display:none}.page::before{-webkit-print-color-adjust:exact;print-color-adjust:exact}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+  </style></head><body><button class="print-action" onclick="window.print()">Print / Save PDF</button><article class="page">
+  <header class="top-strip"><div class="brand">MAINTENANCE<span>OS</span><small>• Medstrom Engineering</small></div><div class="ref">Report ref <b>${escapeHtml(reference)}</b></div></header>
+  <section class="hero"><div><h1>${escapeHtml(title)}</h1><div class="hero-meta"><div><small>Asset</small><b>${escapeHtml(asset.name || '-')}</b><span>${escapeHtml(asset.type || '')}</span></div><div><small>Generated</small><b>${escapeHtml(now)}</b></div><div><small>Status</small><b><span class="status-badge ${tone}">● ${escapeHtml(status)}</span></b></div></div></div>${qr}</section>
+  <main class="content"><section class="report-section"><h2><span class="section-icon"></span> Asset</h2><div class="report-grid">${reportField('Asset name', asset.name)}${reportField('Type', asset.type)}${reportField('Location', asset.location)}${reportField('Serial', asset.serial_number)}${reportField('Status', asset.status)}${reportField('Model', asset.model)}</div></section>${body}</main><footer class="footer"><span>MaintenanceOS Engineering Record</span><span class="subtle">Generated: ${escapeHtml(now)}</span><span>${partsNote} • Page <b>1</b></span></footer></article><script>window.onload=()=>setTimeout(()=>window.print(),300)</script></body></html>`
+}
+
+function reportReference(prefix, seed) {
+  const raw = String(seed || Date.now()).replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase()
+  return `${prefix}-${raw || Date.now().toString().slice(-6)}`
 }
 
 function reportField(label, value) {
@@ -2298,6 +2366,16 @@ function openPrintReport(html) {
   win.document.open()
   win.document.write(html)
   win.document.close()
+}
+
+function humaniseKey(key = '') {
+  return String(key)
+    .replace(/^agv/i, 'AGV ')
+    .replace(/^printer/i, 'Printer ')
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 window.generateMaintenanceReport = generateMaintenanceReport
@@ -2337,22 +2415,43 @@ function assetHistoryTimeline(asset, assetRepairs, assetServices = []) {
   const items = [
     { date: asset.created_at, title: 'Asset created', body: `${asset.type || 'Asset'} registered in ${asset.location || 'no location set'}`, tone: 'created' },
     ...assetRepairs.map(r => ({
-      date: r.created_at,
+      id: r.id,
+      kind: 'repair',
+      date: r.resolved_at || r.created_at,
       title: r.status === 'Resolved' ? `Repair resolved: ${r.title || 'Ticket'}` : `Repair logged: ${r.title || 'Ticket'}`,
       body: `${r.priority || 'Medium'} priority • ${r.status || 'Open'}${r.resolution_notes ? ` • ${r.resolution_notes}` : ''}`,
       tone: r.status === 'Resolved' ? 'resolved' : getRepairHealth(r).state,
       photo: r.photo_url,
-      reportType: r.status === 'Resolved' ? 'repair' : null,
-      reportId: r.id
+      reportable: r.status === 'Resolved'
     })),
     ...assetServices.map(s => ({
+      id: s.id,
+      kind: 'service',
       date: s.service_date || s.created_at,
       title: `Service completed: ${s.service_type || 'Service'}`,
       body: `${s.condition_after || 'Condition not recorded'} • Next due ${s.next_service_due || '-'}${s.corrective_action ? ` • ${s.corrective_action}` : ''}`,
       tone: 'service',
-      reportType: 'service',
-      reportId: s.id
-    }))
+      reportable: true
+    })),
+    ...partsUsage.filter(u => u.asset_id === asset.id).map(u => ({
+      date: u.created_at,
+      title: `Part fitted: ${partNameFromUsage(u)}`,
+      body: `Quantity used: ${u.quantity_used || 1}${u.notes ? ` • ${u.notes}` : ''}`,
+      tone: 'parts'
+    })),
+    ...assetRepairs.filter(r => Number(r.downtime_hours || 0) > 0).map(r => ({
+      date: r.resolved_at || r.created_at,
+      title: `Downtime event: ${Number(r.downtime_hours || 0).toFixed(1)}h`,
+      body: `${r.title || 'Repair'} • ${r.status || 'Open'}`,
+      tone: 'downtime'
+    })),
+    ...assetServices.filter(s => {
+      const data = typeof s.service_data === 'string' ? safeJson(s.service_data) : (s.service_data || {})
+      return data.upgradesRequired || String(s.corrective_action || '').toLowerCase().includes('upgrade')
+    }).map(s => {
+      const data = typeof s.service_data === 'string' ? safeJson(s.service_data) : (s.service_data || {})
+      return { date: s.service_date || s.created_at, title: 'Upgrade / recommendation recorded', body: data.upgradesRequired || s.corrective_action || 'Upgrade recommended', tone: 'upgrade' }
+    })
   ].filter(i => i.date).sort((a,b) => new Date(b.date) - new Date(a.date))
 
   if (!items.length) return '<p class="muted">No history yet.</p>'
@@ -2365,7 +2464,7 @@ function assetHistoryTimeline(asset, assetRepairs, assetServices = []) {
         <span>${new Date(i.date).toLocaleString()}</span>
         <p>${escapeHtml(i.body)}</p>
         ${i.photo ? `<img class="timeline-thumb" src="${escapeHtml(i.photo)}" onclick="window.openImagePreview('${escapeHtml(i.photo)}', '${escapeHtml(i.title)}')" />` : ''}
-        ${i.reportType ? `<button class="report-btn" onclick="window.generateMaintenanceReport('${i.reportType}', '${i.reportId}')">Generate ${i.reportType === 'service' ? 'Service' : 'Repair'} PDF</button>` : ''}
+        ${i.reportable ? `<button class="report-btn" onclick="window.generateMaintenanceReport('${i.kind}', '${i.id}')">Generate ${i.kind === 'service' ? 'Service' : 'Repair'} PDF</button>` : ''}
       </div>
     </div>`).join('')}</div>`
 }
