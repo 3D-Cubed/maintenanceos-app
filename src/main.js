@@ -8,6 +8,9 @@ let session = null
 let assets = []
 let repairs = []
 let maintenance = []
+let serviceRecords = []
+let partsInventory = []
+let partsUsage = []
 let activePage = 'dashboard'
 let resolveContext = null
 let resolvingTicket = false
@@ -90,19 +93,49 @@ function renderAuth() {
 }
 
 async function loadData() {
-  const [assetResult, repairResult, maintenanceResult] = await Promise.all([
-    supabase.from('assets').select('*').or('archived.is.null,archived.eq.false').order('created_at', { ascending: false }),
+  const [assetResult, repairResult, maintenanceResult, serviceResult, partsResult, usageResult] = await Promise.all([
+    safeAssetsQuery(),
     supabase.from('repair_tickets').select('*').order('created_at', { ascending: false }),
-    supabase.from('maintenance_tasks').select('*').order('due_date', { ascending: true })
+    supabase.from('maintenance_tasks').select('*').order('due_date', { ascending: true }),
+    supabase.from('service_records').select('*').order('service_date', { ascending: false }),
+    supabase.from('parts_inventory').select('*').order('part_name', { ascending: true }),
+    supabase.from('parts_usage').select('*').order('created_at', { ascending: false })
   ])
 
   if (assetResult.error) console.warn(assetResult.error.message)
   if (repairResult.error) console.warn(repairResult.error.message)
-  if (maintenanceResult.error && !maintenanceResult.error.message.includes('maintenance_tasks')) console.warn(maintenanceResult.error.message)
+  if (maintenanceResult.error && !String(maintenanceResult.error.message).includes('maintenance_tasks')) console.warn(maintenanceResult.error.message)
+  if (serviceResult.error && !String(serviceResult.error.message).includes('service_records')) console.warn(serviceResult.error.message)
+  if (partsResult?.error && !String(partsResult.error.message).includes('parts_inventory')) console.warn(partsResult.error.message)
+  if (usageResult?.error && !String(usageResult.error.message).includes('parts_usage')) console.warn(usageResult.error.message)
 
   assets = assetResult.data || []
   repairs = repairResult.data || []
   maintenance = maintenanceResult.data || []
+  serviceRecords = serviceResult.data || []
+  partsInventory = partsResult?.data || []
+  partsUsage = usageResult?.data || []
+}
+
+async function safeAssetsQuery() {
+  const filtered = await supabase
+    .from('assets')
+    .select('*')
+    .or('archived.is.null,archived.eq.false')
+    .order('created_at', { ascending: false })
+
+  if (!filtered.error) return filtered
+
+  const fallback = await supabase
+    .from('assets')
+    .select('*')
+    .order('created_at', { ascending: false })
+
+  if (!fallback.error) {
+    fallback.data = (fallback.data || []).filter(a => a.archived !== true)
+    return fallback
+  }
+  return filtered
 }
 
 function handleRoute() {
@@ -131,7 +164,10 @@ function renderShell(withSidebar = true) {
         ${navButton('dashboard', 'Dashboard')}
         ${navButton('assets', 'Assets')}
         ${navButton('repairs', 'Repairs')}
+        ${navButton('agv', 'AGV Fleet')}
+        ${navButton('printers', '3D Printer Fleet')}
         ${navButton('maintenance', 'Maintenance')}
+        ${navButton('parts', 'Parts Inventory')}
         ${navButton('qr', 'QR Labels')}
         ${navButton('reports', 'Reports')}
         <button id="logout" class="nav danger">Exit</button>
@@ -163,7 +199,10 @@ function renderPage() {
   if (activePage === 'dashboard') return renderDashboard()
   if (activePage === 'assets') return renderAssets()
   if (activePage === 'repairs') return renderRepairs()
+  if (activePage === 'agv') return renderFleetPage('agv')
+  if (activePage === 'printers') return renderFleetPage('printer')
   if (activePage === 'maintenance') return renderMaintenance()
+  if (activePage === 'parts') return renderPartsInventory()
   if (activePage === 'qr') return renderQR()
   if (activePage === 'reports') return renderReports()
   renderDashboard()
@@ -201,6 +240,23 @@ function renderDashboard() {
       ${statCard('Under Repair', underRepair, 'Active engineering work')}
       ${statCard('Needs Attention', attention, 'Service or inspection required')}
       ${statCard('Overdue Repairs', overdueRepairs, `${criticalOpen} critical open`)}
+    </section>
+    <section class="grid three intelligence-grid">
+      <div class="card intelligence-card">
+        <h2>Maintenance Intelligence</h2>
+        <p class="muted">Calculated from faults, downtime, overdue service and repeat issues.</p>
+        ${intelligenceSummary()}
+      </div>
+      <div class="card intelligence-card">
+        <h2>Fleet Health</h2>
+        <p class="muted">Live health average by equipment family.</p>
+        ${fleetHealthSummary()}
+      </div>
+      <div class="card intelligence-card danger-glow">
+        <h2>High Risk Radar</h2>
+        <p class="muted">Assets needing engineering attention first.</p>
+        ${highRiskAssets().map(a => compactHealthRow(a)).join('') || '<p class="muted">No high-risk assets detected.</p>'}
+      </div>
     </section>
     <section class="grid two">
       <div class="card">
@@ -287,12 +343,17 @@ function value(selector) {
 }
 
 function assetRow(a) {
+  const health = calculateAssetHealth(a)
   return `
-    <div class="data-row">
+    <div class="data-row asset-health-row">
       <div>
         <h3>${escapeHtml(a.name || 'Unnamed Asset')}</h3>
         <p>${escapeHtml(a.type || 'Asset')} • ${escapeHtml(a.location || 'No location')}</p>
         <small>Status: <span class="status-pill ${statusClass(a.status)}">${escapeHtml(a.status || 'Operational')}</span></small>
+      </div>
+      <div class="health-mini ${health.tone}">
+        <span>${health.score}</span>
+        <small>${health.label}</small>
       </div>
       <div class="row-actions">
         <button onclick="location.hash='asset/${a.id}'">Open</button>
@@ -300,6 +361,57 @@ function assetRow(a) {
       </div>
     </div>
   `
+}
+
+function openRepairsForAsset(assetRepairs = []) {
+  const active = assetRepairs.filter(r => r.status !== 'Resolved').slice(0, 4)
+  if (!active.length) return '<p class="muted">No open repairs for this asset.</p>'
+  return active.map(r => {
+    const health = getRepairHealth(r)
+    return `<div class="asset-mini-row ${health.state}">
+      <div><strong>${escapeHtml(r.title || 'Repair ticket')}</strong><small>${escapeHtml(r.priority || 'Medium')} • ${escapeHtml(r.status || 'Open')}</small></div>
+      <span>${escapeHtml(health.label)}</span>
+    </div>`
+  }).join('')
+}
+
+function recentAssetParts(assetId) {
+  const usage = partsUsage.filter(u => u.asset_id === assetId).slice(0, 5)
+  if (!usage.length) return '<p class="muted">No stock parts fitted yet.</p>'
+  return usage.map(u => {
+    const part = partsInventory.find(p => p.id === u.part_id)
+    const name = part?.part_name || part?.name || 'Inventory part'
+    return `<div class="asset-mini-row">
+      <div><strong>${escapeHtml(name)}</strong><small>${escapeHtml(u.source_type || 'service')} • ${formatDate(u.created_at)}</small></div>
+      <span>x${Number(u.quantity_used || 0)}</span>
+    </div>`
+  }).join('')
+}
+
+function recentServiceFindings(assetServices = []) {
+  const rows = assetServices.slice(0, 5).map(s => {
+    const findings = serviceFindingSummary(s)
+    return `<div class="asset-mini-row service-finding-row">
+      <div><strong>${escapeHtml(s.service_type || 'Service')}</strong><small>${escapeHtml(findings || s.corrective_action || s.issues_found || 'No findings recorded')}</small></div>
+      <span>${formatDate(s.service_date || s.created_at)}</span>
+    </div>`
+  })
+  return rows.join('') || '<p class="muted">No service findings recorded yet.</p>'
+}
+
+function serviceFindingSummary(record = {}) {
+  const data = typeof record.service_data === 'string' ? safeJson(record.service_data) : (record.service_data || {})
+  const findings = data.findings || {}
+  const text = Object.entries(findings)
+    .filter(([, v]) => v)
+    .slice(0, 3)
+    .map(([k, v]) => `${k.replace(/([A-Z])/g, ' $1')}: ${v}`)
+    .join(' • ')
+  return text
+}
+
+function safeJson(value) {
+  try { return JSON.parse(value) } catch { return {} }
 }
 
 async function renderAssetDetail(id) {
@@ -310,12 +422,37 @@ async function renderAssetDetail(id) {
     return
   }
   const assetRepairs = repairs.filter(r => r.asset_id === id)
+  const assetServices = serviceRecords.filter(r => r.asset_id === id)
+  const health = calculateAssetHealth(a)
   const qrUrl = `${location.origin}${location.pathname}#asset/${a.id}`
   const qr = await QRCode.toDataURL(qrUrl)
 
   content().innerHTML = `
     ${renderHeader('ASSET RECORD', escapeHtml(a.name), `<button onclick="location.hash='assets'">Back</button><button class="danger subtle" onclick="window.archiveAsset('${a.id}', '${escapeHtml(a.name || 'this asset')}')">Archive Asset</button>`)}
+    <section class="grid three asset-specific-grid">
+      <div class="card intelligence-card">
+        <h2>Open Repairs</h2>
+        <p class="muted">Active engineering work for this asset only.</p>
+        ${openRepairsForAsset(assetRepairs)}
+      </div>
+      <div class="card intelligence-card">
+        <h2>Recent Parts Fitted</h2>
+        <p class="muted">Parts deducted from stock against this asset.</p>
+        ${recentAssetParts(a.id)}
+      </div>
+      <div class="card intelligence-card">
+        <h2>Recent Service Findings</h2>
+        <p class="muted">Latest non-pass inspection notes and actions.</p>
+        ${recentServiceFindings(assetServices)}
+      </div>
+    </section>
     <section class="grid two">
+      <div class="card asset-health-card ${health.tone}">
+        <h2>Asset Health</h2>
+        <div class="health-orb" style="--score:${health.score}"><span>${health.score}</span></div>
+        <h3>${health.label}</h3>
+        <p class="muted">${escapeHtml(health.reason)}</p>
+      </div>
       <div class="card">
         <h2>Equipment Details</h2>
         <p><b>Type:</b> ${escapeHtml(a.type || '-')}</p>
@@ -330,33 +467,107 @@ async function renderAssetDetail(id) {
       <div class="card qr-mini">
         <h2>QR Link</h2>
         <img src="${qr}" alt="QR code" />
-        <button onclick="navigator.clipboard.writeText('${qrUrl}'); window.toast?.('Asset link copied.', 'success')">Copy Asset Link</button><button class="primary" onclick="document.querySelector('#repairTitle')?.focus()">Log Fault</button>
+        <button onclick="navigator.clipboard.writeText('${qrUrl}'); window.toast?.('Asset link copied.', 'success')">Copy Asset Link</button>
+        <button class="primary" onclick="window.openAssetModal('repairModal')">Log Fault</button>
       </div>
     </section>
-    <section class="card">
-      <h2>Quick Log Repair</h2>
-      <p class="muted">QR workflow: scan, describe fault, attach photo, submit.</p>
-      <div id="messageBox" class="message hidden"></div>
-      <input id="repairTitle" placeholder="Fault title" />
-      <textarea id="repairDesc" placeholder="Fault description"></textarea>
-      <div class="form-grid">
-        <select id="repairPriority">${priorityOptions.map(o => `<option>${o}</option>`).join('')}</select>
-        <select id="repairStatus">${repairStatusOptions.map(o => `<option>${o}</option>`).join('')}</select>
-        <input id="repairCost" type="number" step="0.01" placeholder="Cost £" />
-        <input id="repairDowntime" type="number" step="0.1" placeholder="Downtime hours" />
+    <section class="card action-console">
+      <div>
+        <h2>Asset Actions</h2>
+        <p class="muted">Keep the asset record clean. Open engineering forms only when needed.</p>
       </div>
-      <input id="repairParts" placeholder="Parts used" />
-      <label class="file-label">Attach photo <input id="repairPhoto" type="file" accept="image/*" /></label>
-      <button id="saveRepair" class="primary">Save Repair</button>
+      <div class="action-buttons">
+        <button class="primary" onclick="window.openAssetModal('serviceModal')">Log Service / Inspection</button>
+        <button onclick="window.openAssetModal('repairModal')">Log Repair / Fault</button>
+      </div>
     </section>
     <section class="card">
       <h2>Asset History Timeline</h2>
-      ${assetHistoryTimeline(a, assetRepairs)}
+      ${assetHistoryTimeline(a, assetRepairs, assetServices)}
     </section>
+    <div id="serviceModal" class="asset-modal hidden">
+      <div class="asset-modal-backdrop" onclick="window.closeAssetModal('serviceModal')"></div>
+      <div class="asset-modal-card service-modal-card">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">SERVICE WORKFLOW</p>
+            <h2>Log Service / Inspection</h2>
+            <p class="muted">Creates a structured service record and recalculates the next service date.</p>
+          </div>
+          <button class="icon-btn" onclick="window.closeAssetModal('serviceModal')">×</button>
+        </div>
+        <div class="asset-modal-scroll">
+          <div id="serviceMessageBox" class="message hidden"></div>
+          ${serviceFormMarkup(a.id)}
+        </div>
+      </div>
+    </div>
+    <div id="repairModal" class="asset-modal hidden">
+      <div class="asset-modal-backdrop" onclick="window.closeAssetModal('repairModal')"></div>
+      <div class="asset-modal-card repair-modal-card">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">FAULT WORKFLOW</p>
+            <h2>Log Repair / Fault</h2>
+            <p class="muted">QR workflow: scan, describe fault, attach photo, submit.</p>
+          </div>
+          <button class="icon-btn" onclick="window.closeAssetModal('repairModal')">×</button>
+        </div>
+        <div class="asset-modal-scroll">
+          <div id="messageBox" class="message hidden"></div>
+          <input id="repairTitle" placeholder="Fault title" />
+          <textarea id="repairDesc" placeholder="Fault description"></textarea>
+          <div class="form-grid">
+            <select id="repairPriority">${priorityOptions.map(o => `<option>${o}</option>`).join('')}</select>
+            <select id="repairStatus">${repairStatusOptions.map(o => `<option>${o}</option>`).join('')}</select>
+            <input id="repairCost" type="number" step="0.01" placeholder="Cost £" />
+            <input id="repairDowntime" type="number" step="0.1" placeholder="Downtime hours" />
+          </div>
+          ${partsSelectorMarkup('repair')}
+          <input id="repairParts" placeholder="Extra parts notes / non-stock items" />
+          <label class="file-label">Attach photo <input id="repairPhoto" type="file" accept="image/*" /></label>
+        </div>
+        <div class="modal-actions">
+          <button onclick="window.closeAssetModal('repairModal')">Cancel</button>
+          <button id="saveRepair" class="primary">Save Repair</button>
+        </div>
+      </div>
+    </div>
   `
 
   document.querySelector('#saveRepair').onclick = () => addRepair(a.id)
+  document.querySelector('#saveService')?.addEventListener('click', () => saveServiceRecord(a.id))
+  initialiseServiceConditionalNotes()
 }
+
+
+
+function openAssetModal(id) {
+  const modal = document.getElementById(id)
+  if (!modal) return
+  modal.classList.remove('hidden')
+  document.body.classList.add('modal-open')
+  setTimeout(() => {
+    const first = modal.querySelector('input, textarea, select, button.primary')
+    first?.focus?.()
+  }, 60)
+}
+
+function closeAssetModal(id) {
+  const modal = document.getElementById(id)
+  if (!modal) return
+  modal.classList.add('hidden')
+  if (!document.querySelector('.asset-modal:not(.hidden)')) document.body.classList.remove('modal-open')
+}
+
+window.openAssetModal = openAssetModal
+window.closeAssetModal = closeAssetModal
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    document.querySelectorAll('.asset-modal:not(.hidden)').forEach(modal => closeAssetModal(modal.id))
+  }
+})
 
 
 async function uploadRepairPhoto() {
@@ -569,12 +780,14 @@ async function addRepair(assetId = null) {
     status: value('#repairStatus') || 'Open',
     cost: value('#repairCost') ? Number(value('#repairCost')) : null,
     downtime_hours: value('#repairDowntime') ? Number(value('#repairDowntime')) : null,
-    parts_used: value('#repairParts'),
+    parts_used: buildPartsSummary('repair', value('#repairParts')),
     photo_url: await uploadRepairPhoto()
   }
 
   const { error } = await supabase.from('repair_tickets').insert(payload)
   if (error) return showMessage(error.message, 'error')
+
+  await consumeSelectedPart('repair', { assetId: selectedAsset, sourceType: 'repair', sourceId: null, notes: title })
 
   await updateAssetStatusFromRepairs(selectedAsset)
   await audit('repair_logged', 'repair_tickets', title)
@@ -631,9 +844,10 @@ function renderRepairs() {
           </div>
         </div>
 
+        ${partsSelectorMarkup('repair')}
         <div class="field-block wide">
-          <label>Parts used / required</label>
-          <input id="repairParts" placeholder="e.g. nozzle, PTFE tube, belt, sensor, control board..." />
+          <label>Extra parts notes / non-stock items</label>
+          <input id="repairParts" placeholder="e.g. non-stock item, supplier note, temporary fix..." />
         </div>
 
         <label class="file-label premium-upload">
@@ -707,22 +921,219 @@ async function archiveAsset(assetId, assetName = 'this asset') {
 
 window.archiveAsset = archiveAsset
 
+
+function partsSelectorMarkup(prefix) {
+  const compatible = partsInventory.filter(p => partMatchesContext(p, prefix))
+  return `
+    <div class="parts-picker field-block wide">
+      <label>Inventory part used</label>
+      <div class="parts-picker-grid">
+        <select id="${prefix}PartId">
+          <option value="">No stock part selected</option>
+          ${compatible.map(p => `<option value="${p.id}">${escapeHtml(p.part_name || p.name || 'Part')} — ${Number(p.quantity_in_stock || 0)} in stock</option>`).join('')}
+        </select>
+        <input id="${prefix}PartQty" type="number" min="1" step="1" placeholder="Qty" />
+      </div>
+      <small class="muted">Selecting a stock part deducts the quantity when the service or repair is saved.</small>
+    </div>
+  `
+}
+
+function partMatchesContext(part, prefix) {
+  const type = String(part.equipment_type || part.asset_type || 'General').toLowerCase()
+  if (prefix === 'service' || prefix === 'repair') return true
+  return !type
+}
+
+function selectedPart(prefix) {
+  const partId = value(`#${prefix}PartId`)
+  const qty = Number(value(`#${prefix}PartQty`) || 0)
+  if (!partId || !qty) return null
+  const part = partsInventory.find(p => p.id === partId)
+  if (!part) return null
+  return { part, qty }
+}
+
+function buildPartsSummary(prefix, extraNotes = '') {
+  const selected = selectedPart(prefix)
+  const lines = []
+  if (selected) lines.push(`${selected.part.part_name || selected.part.name || 'Inventory part'} x${selected.qty}`)
+  if (extraNotes) lines.push(extraNotes)
+  return lines.join(' | ')
+}
+
+async function consumeSelectedPart(prefix, { assetId, sourceType, sourceId = null, notes = '' }) {
+  const selected = selectedPart(prefix)
+  if (!selected) return
+  const current = Number(selected.part.quantity_in_stock || 0)
+  const nextQty = Math.max(0, current - selected.qty)
+
+  const { error: updateError } = await supabase
+    .from('parts_inventory')
+    .update({ quantity_in_stock: nextQty, updated_at: new Date().toISOString() })
+    .eq('id', selected.part.id)
+
+  if (updateError) {
+    toast(`Part stock not updated: ${updateError.message}`, 'error')
+    return
+  }
+
+  const usagePayload = {
+    part_id: selected.part.id,
+    asset_id: assetId,
+    source_type: sourceType,
+    source_id: sourceId,
+    quantity_used: selected.qty,
+    notes
+  }
+  const { error: usageError } = await supabase.from('parts_usage').insert(usagePayload)
+  if (usageError) console.warn('Part usage history skipped:', usageError.message)
+  await audit('part_stock_deducted', 'parts_inventory', `${selected.part.part_name || selected.part.name} x${selected.qty}; ${current} -> ${nextQty}`)
+}
+
+function lowStockParts() {
+  return partsInventory.filter(p => Number(p.quantity_in_stock || 0) <= Number(p.minimum_stock_level || 0))
+}
+
+async function uploadPartImage() {
+  const input = document.querySelector('#partImage')
+  const file = input?.files?.[0]
+  if (!file) return value('#partImageUrl') || null
+  const safeName = file.name.replace(/[^a-z0-9.\-_]/gi, '_')
+  const path = `${Date.now()}-${safeName}`
+  const { error } = await supabase.storage.from('part-images').upload(path, file, { upsert: false })
+  if (error) {
+    showMessage(`Part image upload skipped: ${error.message}. You can paste an image URL instead.`, 'error')
+    return value('#partImageUrl') || null
+  }
+  const { data } = supabase.storage.from('part-images').getPublicUrl(path)
+  return data?.publicUrl || null
+}
+
+function renderPartsInventory() {
+  const low = lowStockParts()
+  const totalValue = partsInventory.reduce((sum, p) => sum + Number(p.price || 0) * Number(p.quantity_in_stock || 0), 0)
+  content().innerHTML = `
+    ${renderHeader('PARTS & SPARES CONTROL', 'Parts Inventory', '<button id="refresh">Refresh</button>')}
+    <section class="stats-grid parts-stats">
+      ${statCard('Parts Listed', partsInventory.length, 'Inventory records')}
+      ${statCard('Low Stock', low.length, 'At or below minimum')}
+      ${statCard('Stock Value', `£${totalValue.toFixed(2)}`, 'Estimated inventory value')}
+      ${statCard('Usage Events', partsUsage.length, 'Services and repairs')}
+      ${statCard('Locations', new Set(partsInventory.map(p => p.stock_location).filter(Boolean)).size, 'Stock locations')}
+    </section>
+    <section class="card">
+      <h2>Add Part</h2>
+      <p class="muted">Add AGV, 3D printer or general engineering spares. Parts can then be selected on service and repair forms.</p>
+      <div id="messageBox" class="message hidden"></div>
+      <div class="form-grid">
+        <input id="partName" placeholder="Part name" />
+        <select id="partEquipmentType">
+          <option>AGV</option>
+          <option>3D Printer</option>
+          <option>General</option>
+        </select>
+        <input id="partCategory" placeholder="Category e.g. Sensor / Belt / Nozzle" />
+        <input id="partPrice" type="number" step="0.01" placeholder="Price £" />
+        <input id="partQty" type="number" step="1" placeholder="Qty currently in stock" />
+        <input id="partMinQty" type="number" step="1" placeholder="Minimum stock level" />
+        <input id="partLocation" placeholder="Location e.g. Stores A / Drawer 3" />
+        <input id="partSupplierUrl" placeholder="Supplier / part website link" />
+      </div>
+      <div class="form-grid">
+        <label class="file-label">Upload part image <input id="partImage" type="file" accept="image/*" /></label>
+        <input id="partImageUrl" placeholder="Or paste image URL" />
+      </div>
+      <textarea id="partNotes" placeholder="Notes, compatibility, reorder detail..."></textarea>
+      <button id="addPart" class="primary">Add Part</button>
+    </section>
+    <section class="grid two">
+      <div class="card">
+        <h2>Low Stock Alerts</h2>
+        ${low.map(partAlertRow).join('') || '<p class="muted">No low stock alerts.</p>'}
+      </div>
+      <div class="card">
+        <h2>Recent Parts Usage</h2>
+        ${partsUsage.slice(0, 8).map(partsUsageRow).join('') || '<p class="muted">No parts usage recorded yet.</p>'}
+      </div>
+    </section>
+    <section class="card">
+      <h2>Parts List</h2>
+      <div class="parts-grid">
+        ${partsInventory.map(partCard).join('') || '<p class="muted">No parts added yet. Add the V17 parts SQL table first, then create your spares list.</p>'}
+      </div>
+    </section>
+  `
+  document.querySelector('#refresh').onclick = async () => { await loadData(); renderPartsInventory() }
+  document.querySelector('#addPart').onclick = addPart
+}
+
+async function addPart() {
+  const partName = value('#partName')
+  if (!partName) return showMessage('Part name is required.', 'error')
+  const payload = {
+    part_name: partName,
+    equipment_type: value('#partEquipmentType') || 'General',
+    category: value('#partCategory'),
+    price: value('#partPrice') ? Number(value('#partPrice')) : 0,
+    supplier_url: value('#partSupplierUrl'),
+    quantity_in_stock: value('#partQty') ? Number(value('#partQty')) : 0,
+    minimum_stock_level: value('#partMinQty') ? Number(value('#partMinQty')) : 0,
+    stock_location: value('#partLocation'),
+    image_url: await uploadPartImage(),
+    notes: value('#partNotes')
+  }
+  const { error } = await supabase.from('parts_inventory').insert(payload)
+  if (error) return showMessage(error.message || 'Could not add part. Add the V17 parts SQL table first.', 'error')
+  await audit('part_created', 'parts_inventory', partName)
+  await loadData()
+  renderPartsInventory()
+}
+
+function partCard(part) {
+  const qty = Number(part.quantity_in_stock || 0)
+  const min = Number(part.minimum_stock_level || 0)
+  const low = qty <= min
+  return `
+    <article class="part-card ${low ? 'low-stock' : ''}">
+      <div class="part-image-wrap">${part.image_url ? `<img src="${escapeHtml(part.image_url)}" alt="${escapeHtml(part.part_name || 'Part')}" />` : '<div class="part-placeholder">PART</div>'}</div>
+      <div>
+        <p class="eyebrow">${escapeHtml(part.equipment_type || 'General')}</p>
+        <h3>${escapeHtml(part.part_name || 'Unnamed part')}</h3>
+        <p>${escapeHtml(part.category || 'Uncategorised')} • ${escapeHtml(part.stock_location || 'No location')}</p>
+        <div class="part-meta"><span>£${Number(part.price || 0).toFixed(2)}</span><span class="${low ? 'danger-text' : ''}">${qty} in stock</span><span>Min ${min}</span></div>
+        ${part.supplier_url ? `<button onclick="window.open('${escapeHtml(part.supplier_url)}', '_blank')">Open Supplier</button>` : ''}
+      </div>
+    </article>
+  `
+}
+
+function partAlertRow(part) {
+  return `<div class="data-row overdue"><div><h3>${escapeHtml(part.part_name)}</h3><p>${escapeHtml(part.stock_location || 'No location')} • ${escapeHtml(part.equipment_type || 'General')}</p><small>${Number(part.quantity_in_stock || 0)} in stock / minimum ${Number(part.minimum_stock_level || 0)}</small></div></div>`
+}
+
+function partsUsageRow(row) {
+  const part = partsInventory.find(p => p.id === row.part_id)
+  const asset = assets.find(a => a.id === row.asset_id)
+  return `<div class="data-row"><div><h3>${escapeHtml(part?.part_name || 'Part used')}</h3><p>${escapeHtml(asset?.name || 'Unknown asset')} • ${escapeHtml(row.source_type || 'usage')}</p><small>Qty ${escapeHtml(row.quantity_used || 0)} • ${formatDate(row.created_at)}</small></div></div>`
+}
+
 function renderMaintenance() {
   const today = new Date().toISOString().slice(0, 10)
+  const dueAssets = assets
+    .slice()
+    .sort((a, b) => String(a.next_service_date || '9999').localeCompare(String(b.next_service_date || '9999')))
+
   content().innerHTML = `
     ${renderHeader('PLANNED MAINTENANCE', 'Maintenance')}
     <section class="card">
       <h2>Service Schedule</h2>
-      ${assets.map(a => `
-        <div class="data-row ${a.next_service_date && a.next_service_date < today ? 'overdue' : ''}">
-          <div>
-            <h3>${escapeHtml(a.name)}</h3>
-            <p>Next service: ${escapeHtml(a.next_service_date || 'Not set')}</p>
-            <small>${a.next_service_date && a.next_service_date < today ? 'Overdue' : 'Scheduled'}</small>
-          </div>
-          <div class="row-actions"><button onclick="window.markServiced('${a.id}')">Mark Serviced</button></div>
-        </div>
-      `).join('') || '<p class="muted">No assets to schedule.</p>'}
+      <p class="muted">Use the service form to record what was inspected, what was found and when the next service is due.</p>
+      ${dueAssets.map(a => serviceScheduleRow(a, today)).join('') || '<p class="muted">No assets to schedule.</p>'}
+    </section>
+    <section class="card">
+      <h2>Recent Service Records</h2>
+      ${serviceRecords.slice(0, 12).map(serviceRecordRow).join('') || '<p class="muted">No service records yet. Add the optional V16 service_records table to retain full form history.</p>'}
     </section>
     <section class="card">
       <h2>Maintenance Tasks</h2>
@@ -734,6 +1145,35 @@ function renderMaintenance() {
           </div>
         </div>`).join('') || '<p class="muted">No extra maintenance tasks.</p>'}
     </section>
+  `
+}
+
+function serviceScheduleRow(a, today) {
+  const health = calculateAssetHealth(a)
+  const overdue = a.next_service_date && a.next_service_date < today
+  return `
+    <div class="data-row ${overdue ? 'overdue' : ''}">
+      <div>
+        <h3>${escapeHtml(a.name)}</h3>
+        <p>${escapeHtml(a.type || 'Asset')} • Next service: ${escapeHtml(a.next_service_date || 'Not set')}</p>
+        <small>${overdue ? 'Overdue' : 'Scheduled'} • Health ${health.score}%</small>
+      </div>
+      <div class="row-actions"><button onclick="location.hash='asset/${a.id}'">Open Service Form</button></div>
+    </div>
+  `
+}
+
+function serviceRecordRow(record) {
+  const asset = assets.find(a => a.id === record.asset_id)
+  return `
+    <div class="data-row service-record-row">
+      <div>
+        <h3>${escapeHtml(asset?.name || record.asset_name || 'Asset Service')}</h3>
+        <p>${escapeHtml(record.service_type || 'Service')} • ${escapeHtml(record.condition_after || 'Condition not recorded')}</p>
+        <small>${escapeHtml(record.engineer_name || 'Unknown engineer')} • ${formatDate(record.service_date || record.created_at)}</small>
+      </div>
+      <div class="service-chip">Next: ${escapeHtml(record.next_service_due || '-')}</div>
+    </div>
   `
 }
 
@@ -761,6 +1201,448 @@ async function renderQR() {
       </div>
     `
   }
+}
+
+
+function renderFleetPage(kind) {
+  const isAgv = kind === 'agv'
+  const fleetAssets = assets.filter(a => isAgv ? isAgvAsset(a) : isPrinterAsset(a))
+  const title = isAgv ? 'AGV Fleet' : '3D Printer Fleet'
+  const kicker = isAgv ? 'AUTONOMOUS VEHICLE COMMAND' : 'ADDITIVE MANUFACTURING COMMAND'
+  const healthAvg = averageHealth(fleetAssets)
+  const activeFaults = repairs.filter(r => fleetAssets.some(a => a.id === r.asset_id) && r.status !== 'Resolved')
+  const overdueService = fleetAssets.filter(a => isServiceOverdue(a)).length
+
+  content().innerHTML = `
+    ${renderHeader(kicker, title, '<button id="refresh">Refresh</button>')}
+    <section class="stats-grid fleet-stats">
+      ${statCard('Fleet Assets', fleetAssets.length, isAgv ? 'AGV units tracked' : 'Printer units tracked')}
+      ${statCard('Fleet Health', `${healthAvg}%`, 'Average calculated health')}
+      ${statCard('Active Faults', activeFaults.length, 'Open repair tickets')}
+      ${statCard('Overdue Service', overdueService, 'Service date exceeded')}
+      ${statCard('Downtime', `${fleetDowntime(fleetAssets).toFixed(1)}h`, 'Logged downtime')}
+    </section>
+    <section class="fleet-command-grid">
+      ${fleetAssets.map(fleetCard).join('') || `<div class="card"><p class="muted">No ${isAgv ? 'AGV' : '3D printer'} assets found. Check asset type naming.</p></div>`}
+    </section>
+  `
+  document.querySelector('#refresh').onclick = async () => { await loadData(); renderFleetPage(kind) }
+}
+
+function fleetCard(asset) {
+  const health = calculateAssetHealth(asset)
+  const open = repairs.filter(r => r.asset_id === asset.id && r.status !== 'Resolved')
+  const lastService = serviceRecords.find(s => s.asset_id === asset.id)
+  return `
+    <article class="fleet-card ${health.tone}">
+      <div class="fleet-card-head">
+        <div>
+          <p class="eyebrow">${escapeHtml(asset.type || 'Asset')}</p>
+          <h2>${escapeHtml(asset.name || 'Unnamed')}</h2>
+          <p>${escapeHtml(asset.location || 'No location')}</p>
+        </div>
+        <div class="health-ring" style="--score:${health.score}"><span>${health.score}</span></div>
+      </div>
+      <div class="fleet-metrics">
+        <span><b>${open.length}</b><small>Open faults</small></span>
+        <span><b>${asset.next_service_date || '-'}</b><small>Next service</small></span>
+        <span><b>${lastService?.condition_after || 'Unknown'}</b><small>Last condition</small></span>
+      </div>
+      <p class="muted">${escapeHtml(health.reason)}</p>
+      <div class="row-actions">
+        <button onclick="location.hash='asset/${asset.id}'">Open Record</button>
+        <button class="primary" onclick="location.hash='asset/${asset.id}'; setTimeout(() => document.querySelector('#serviceType')?.focus(), 100)">Service</button>
+      </div>
+    </article>
+  `
+}
+
+function isAgvAsset(asset) {
+  const text = `${asset.name || ''} ${asset.type || ''} ${asset.model || ''}`.toLowerCase()
+  return text.includes('agv') || text.includes('automated guided') || text.includes('vehicle')
+}
+
+function isPrinterAsset(asset) {
+  const text = `${asset.name || ''} ${asset.type || ''} ${asset.location || ''}`.toLowerCase()
+  return text.includes('printer') || text.includes('3d print') || text.includes('resin') || text.includes('wash station')
+}
+
+function fleetDowntime(fleetAssets) {
+  return repairs
+    .filter(r => fleetAssets.some(a => a.id === r.asset_id))
+    .reduce((sum, r) => sum + Number(r.downtime_hours || 0), 0)
+}
+
+function averageHealth(assetList) {
+  if (!assetList.length) return 0
+  return Math.round(assetList.reduce((sum, a) => sum + calculateAssetHealth(a).score, 0) / assetList.length)
+}
+
+function isServiceOverdue(asset) {
+  return Boolean(asset.next_service_date && asset.next_service_date < new Date().toISOString().slice(0, 10))
+}
+
+function calculateAssetHealth(asset) {
+  const assetRepairs = repairs.filter(r => r.asset_id === asset.id)
+  const openRepairs = assetRepairs.filter(r => r.status !== 'Resolved')
+  const criticalOpen = openRepairs.filter(r => r.priority === 'Critical').length
+  const highOpen = openRepairs.filter(r => r.priority === 'High').length
+  const downtime = assetRepairs.reduce((sum, r) => sum + Number(r.downtime_hours || 0), 0)
+  const recent = assetRepairs.filter(r => daysSince(r.created_at) <= 90)
+  const overdue = isServiceOverdue(asset)
+  const repeatFaults = countRepeatFaults(assetRepairs)
+  const outOfService = String(asset.status || '').toLowerCase().includes('out')
+  const underRepair = String(asset.status || '').toLowerCase().includes('repair')
+  const needsAttention = String(asset.status || '').toLowerCase().includes('attention')
+
+  let score = 100
+  score -= openRepairs.length * 10
+  score -= criticalOpen * 18
+  score -= highOpen * 10
+  score -= Math.min(20, recent.length * 4)
+  score -= Math.min(22, downtime * 1.5)
+  score -= overdue ? 14 : 0
+  score -= repeatFaults * 7
+  score -= outOfService ? 24 : underRepair ? 14 : needsAttention ? 8 : 0
+  score = Math.max(0, Math.min(100, Math.round(score)))
+
+  const reasons = []
+  if (openRepairs.length) reasons.push(`${openRepairs.length} open fault${openRepairs.length === 1 ? '' : 's'}`)
+  if (criticalOpen) reasons.push(`${criticalOpen} critical`)
+  if (overdue) reasons.push('service overdue')
+  if (repeatFaults) reasons.push('repeat fault pattern')
+  if (downtime) reasons.push(`${downtime.toFixed(1)}h downtime`)
+  if (!reasons.length) reasons.push('stable service and repair profile')
+
+  const tone = score >= 80 ? 'healthy' : score >= 60 ? 'watch' : score >= 40 ? 'risk' : 'critical'
+  const label = score >= 80 ? 'Stable' : score >= 60 ? 'Watchlist' : score >= 40 ? 'High Risk' : 'Critical'
+  return { score, tone, label, reason: reasons.join(' • ') }
+}
+
+function daysSince(dateValue) {
+  if (!dateValue) return 9999
+  return Math.max(0, (Date.now() - new Date(dateValue).getTime()) / 864e5)
+}
+
+function countRepeatFaults(assetRepairs) {
+  const words = {}
+  assetRepairs.forEach(r => {
+    const key = String(r.title || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').split(' ').filter(w => w.length > 4).slice(0, 3).join(' ')
+    if (!key) return
+    words[key] = (words[key] || 0) + 1
+  })
+  return Object.values(words).filter(v => v >= 2).length
+}
+
+function highRiskAssets() {
+  return assets
+    .map(a => ({ ...a, _health: calculateAssetHealth(a) }))
+    .filter(a => a._health.score < 70)
+    .sort((a, b) => a._health.score - b._health.score)
+    .slice(0, 5)
+}
+
+function compactHealthRow(asset) {
+  const health = asset._health || calculateAssetHealth(asset)
+  return `
+    <div class="compact-health-row ${health.tone}">
+      <div><strong>${escapeHtml(asset.name)}</strong><small>${escapeHtml(health.reason)}</small></div>
+      <b>${health.score}</b>
+    </div>
+  `
+}
+
+function intelligenceSummary() {
+  const risk = highRiskAssets().length
+  const avg = averageHealth(assets)
+  const overdue = assets.filter(isServiceOverdue).length
+  return `
+    <div class="intel-readout">
+      <div><b>${avg}%</b><span>Average asset health</span></div>
+      <div><b>${risk}</b><span>High-risk assets</span></div>
+      <div><b>${overdue}</b><span>Overdue services</span></div>
+    </div>
+  `
+}
+
+function fleetHealthSummary() {
+  const agv = assets.filter(isAgvAsset)
+  const printers = assets.filter(isPrinterAsset)
+  return barList([
+    { label: 'AGV Fleet', value: averageHealth(agv), tone: averageHealth(agv) < 60 ? 'danger' : averageHealth(agv) < 80 ? 'warning' : 'ok' },
+    { label: '3D Printer Fleet', value: averageHealth(printers), tone: averageHealth(printers) < 60 ? 'danger' : averageHealth(printers) < 80 ? 'warning' : 'ok' }
+  ])
+}
+
+function serviceFormMarkup(assetId) {
+  const asset = assets.find(a => a.id === assetId)
+  const isAgv = isAgvAsset(asset || {})
+  const isPrinter = isPrinterAsset(asset || {})
+  const today = new Date().toISOString().slice(0, 10)
+  const next = new Date(); next.setDate(next.getDate() + 90)
+  const workflowTitle = isAgv ? 'AGV Service Workflow' : isPrinter ? '3D Printer Service Workflow' : 'General Service Workflow'
+  const workflowText = isAgv ? 'Mobility, battery and safety inspection.' : isPrinter ? 'Print quality, motion system and reliability inspection.' : 'General engineering inspection.'
+  const specificFields = isAgv ? agvServiceFieldsMarkup() : isPrinter ? printerServiceFieldsMarkup() : generalServiceFieldsMarkup()
+
+  return `
+    <div class="service-workflow-banner ${isAgv ? 'agv' : isPrinter ? 'printer' : 'general'}">
+      <div>
+        <p class="eyebrow">${isAgv ? 'AUTONOMOUS VEHICLE SERVICE' : isPrinter ? 'ADDITIVE MANUFACTURING SERVICE' : 'GENERAL SERVICE'}</p>
+        <h3>${workflowTitle}</h3>
+        <p class="muted">${workflowText}</p>
+      </div>
+    </div>
+    <div class="service-form-stack">
+      <div class="form-grid">
+        <label class="field-block">Service type
+          <select id="serviceType">
+            <option>Preventative Maintenance</option>
+            <option>Inspection</option>
+            <option>Calibration</option>
+            <option>Corrective Service</option>
+            <option>Safety Check</option>
+          </select>
+        </label>
+        <label class="field-block">Engineer
+          <input id="serviceEngineer" placeholder="Engineer name" />
+        </label>
+        <label class="field-block">Service date
+          <input id="serviceDate" type="date" value="${today}" />
+        </label>
+        <label class="field-block">Next service due
+          <input id="serviceNextDue" type="date" value="${next.toISOString().slice(0, 10)}" />
+        </label>
+        <label class="field-block">Downtime hours
+          <input id="serviceDowntime" type="number" step="0.1" placeholder="0.0" />
+        </label>
+        <label class="field-block">Condition after service
+          <select id="serviceCondition">
+            <option>Good</option>
+            <option>Monitor</option>
+            <option>Requires Follow-Up</option>
+            <option>Unsafe / Do Not Use</option>
+          </select>
+        </label>
+      </div>
+      <div class="service-specific-grid">
+        ${specificFields}
+      </div>
+      ${partsSelectorMarkup('service')}
+      <label class="field-block wide">Issues found
+        <textarea id="serviceIssues" placeholder="What issues were found during the service?"></textarea>
+      </label>
+      <label class="field-block wide">Corrective action taken
+        <textarea id="serviceAction" placeholder="What was adjusted, repaired, cleaned, replaced or verified?"></textarea>
+      </label>
+      <label class="field-block wide">Extra parts notes / non-stock parts
+        <input id="serviceParts" placeholder="Parts not in inventory, supplier note, or extra detail" />
+      </label>
+      <div class="form-actions modal-actions inline-actions">
+        <button type="button" onclick="window.closeAssetModal('serviceModal')">Cancel</button>
+        <button id="saveService" class="primary">Save Service Record</button>
+      </div>
+    </div>
+  `
+}
+
+function checkField(id, label, options = ['Pass', 'Monitor', 'Fail', 'N/A']) {
+  return `<label class="field-block service-check" data-check-field="${id}">${label}<select id="${id}" onchange="window.handleServiceCheckChange('${id}')">${options.map(o => `<option>${o}</option>`).join('')}</select><textarea id="${id}Note" class="conditional-note hidden" placeholder="Reason / action required if this did not pass..."></textarea></label>`
+}
+
+function handleServiceCheckChange(id) {
+  const select = document.getElementById(id)
+  const note = document.getElementById(`${id}Note`)
+  if (!select || !note) return
+  const needsNote = serviceCheckNeedsNote(id, select.value)
+  note.classList.toggle('hidden', !needsNote)
+  if (!needsNote) note.value = ''
+}
+
+function serviceCheckNeedsNote(id, result) {
+  if (id === 'agvBatteryType') return false
+  const value = String(result || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  return !['pass', 'passed', 'good', 'ok', 'n a', 'na'].includes(value)
+}
+
+function initialiseServiceConditionalNotes() {
+  document.querySelectorAll('.service-check select').forEach(select => handleServiceCheckChange(select.id))
+}
+
+function collectServiceCheckNotes() {
+  const notes = {}
+  document.querySelectorAll('.conditional-note').forEach(note => {
+    if (note.value.trim()) {
+      const key = note.id.replace(/Note$/, 'Reason')
+      notes[key] = note.value.trim()
+    }
+  })
+  return notes
+}
+
+window.handleServiceCheckChange = handleServiceCheckChange
+
+function textField(id, label, placeholder = 'Notes') {
+  return `<label class="field-block service-check wide">${label}<textarea id="${id}" placeholder="${placeholder}"></textarea></label>`
+}
+
+function dateField(id, label) {
+  return `<label class="field-block service-check">${label}<input id="${id}" type="date" /></label>`
+}
+
+function agvServiceFieldsMarkup() {
+  return `
+    ${checkField('agvBatteryType', 'Battery type', ['LiFePO₄', 'Lead Acid', 'Lithium Ion', 'Other / Unknown'])}
+    ${checkField('agvBatteryHealth', 'Battery health', ['Good', 'Monitor', 'Poor', 'Replace'])}
+    ${checkField('agvDriveMotors', 'Drive motors inspection')}
+    ${checkField('agvWheelCondition', 'Wheel condition', ['Good', 'Worn', 'Damaged', 'Replace'])}
+    ${checkField('agvCrashSensor', 'Crash sensor check')}
+    ${checkField('agvEstop', 'Emergency stop test')}
+    ${checkField('agvTrackSensor', 'Track sensor check')}
+    ${checkField('agvCharger', 'Charger check')}
+    ${textField('agvRouteIssues', 'Route / track issues', 'Track condition, dead zones, route behaviour, docking problems...')}
+    ${checkField('agvWiring', 'Wiring check')}
+    ${textField('agvUpgradesRequired', 'Upgrades required', 'Recommended upgrades, engineering improvements or safety actions...')}
+  `
+}
+
+function printerServiceFieldsMarkup() {
+  return `
+    ${checkField('printerNozzle', 'Nozzle condition', ['Good', 'Cleaned', 'Worn', 'Replaced'])}
+    ${checkField('printerExtruderGear', 'Extruder gear condition')}
+    ${checkField('printerBedLevelling', 'Bed levelling check')}
+    ${checkField('printerBuildPlate', 'Build plate condition', ['Good', 'Worn', 'Damaged', 'Replaced'])}
+    ${checkField('printerBeltTension', 'Belt tension', ['Good', 'Adjusted', 'Loose', 'Replace'])}
+    ${checkField('printerLinearRail', 'Linear rail condition')}
+    ${checkField('printerZAxis', 'Z-axis inspection')}
+    ${textField('printerFirmwareNotes', 'Firmware notes', 'Firmware/config changes, offsets, slicer/profile notes...')}
+    ${checkField('printerFilamentTube', 'Filament tube condition', ['Good', 'Cleaned', 'Worn', 'Replaced'])}
+    ${checkField('printerCalibrationCube', 'Calibration cube / test print results', ['Passed', 'Minor defects', 'Failed', 'Not run'])}
+    ${textField('printerPrintQualityNotes', 'Print quality notes', 'Layer quality, extrusion, ringing, dimensional accuracy, bed adhesion...')}
+  `
+}
+
+function generalServiceFieldsMarkup() {
+  return `
+    ${checkField('generalInspection', 'General inspection')}
+    ${checkField('generalSafety', 'Safety check')}
+    ${textField('generalNotes', 'Inspection notes')}
+  `
+}
+
+function collectServiceData(asset) {
+  const isAgv = isAgvAsset(asset || {})
+  const isPrinter = isPrinterAsset(asset || {})
+  if (isAgv) return {
+    batteryType: value('#agvBatteryType'),
+    batteryHealth: value('#agvBatteryHealth'),
+    driveMotorsInspection: value('#agvDriveMotors'),
+    wheelCondition: value('#agvWheelCondition'),
+    crashSensorCheck: value('#agvCrashSensor'),
+    emergencyStopTest: value('#agvEstop'),
+    trackSensorCheck: value('#agvTrackSensor'),
+    chargerCheck: value('#agvCharger'),
+    routeTrackIssues: value('#agvRouteIssues'),
+    wiringCheck: value('#agvWiring'),
+    upgradesRequired: value('#agvUpgradesRequired')
+  }
+  if (isPrinter) return {
+    nozzleCondition: value('#printerNozzle'),
+    extruderGearCondition: value('#printerExtruderGear'),
+    bedLevellingCheck: value('#printerBedLevelling'),
+    buildPlateCondition: value('#printerBuildPlate'),
+    beltTension: value('#printerBeltTension'),
+    linearRailCondition: value('#printerLinearRail'),
+    zAxisInspection: value('#printerZAxis'),
+    firmwareNotes: value('#printerFirmwareNotes'),
+    filamentTubeCondition: value('#printerFilamentTube'),
+    calibrationCubeTestPrintResults: value('#printerCalibrationCube'),
+    printQualityNotes: value('#printerPrintQualityNotes')
+  }
+  return {
+    generalInspection: value('#generalInspection'),
+    safetyCheck: value('#generalSafety'),
+    notes: value('#generalNotes')
+  }
+}
+
+function serviceCategory(asset) {
+  if (isAgvAsset(asset || {})) return 'AGV'
+  if (isPrinterAsset(asset || {})) return '3D_PRINTER'
+  return 'GENERAL'
+}
+
+function serviceDataSummary(data = {}) {
+  return Object.entries(data)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k.replace(/([A-Z])/g, ' $1')}: ${v}`)
+    .join(' | ')
+}
+
+async function saveServiceRecord(assetId) {
+  const asset = assets.find(a => a.id === assetId)
+  const payload = {
+    asset_id: assetId,
+    asset_name: asset?.name || null,
+    service_type: value('#serviceType') || 'Preventative Maintenance',
+    engineer_name: value('#serviceEngineer'),
+    service_date: value('#serviceDate') || new Date().toISOString().slice(0, 10),
+    next_service_due: value('#serviceNextDue') || null,
+    downtime_hours: value('#serviceDowntime') ? Number(value('#serviceDowntime')) : null,
+    condition_after: value('#serviceCondition'),
+    issues_found: value('#serviceIssues'),
+    corrective_action: value('#serviceAction'),
+    parts_replaced: buildPartsSummary('service', value('#serviceParts')),
+    service_category: serviceCategory(asset),
+    service_data: { ...collectServiceData(asset), findings: collectServiceCheckNotes() }
+  }
+
+  const msg = document.querySelector('#serviceMessageBox')
+  if (msg) { msg.className = 'message hidden'; msg.textContent = '' }
+
+  const updatePayload = {
+    next_service_date: payload.next_service_due,
+    status: payload.condition_after === 'Unsafe / Do Not Use' ? 'Out of Service' : payload.condition_after === 'Requires Follow-Up' ? 'Needs Attention' : 'Operational'
+  }
+
+  const { error: updateError } = await supabase.from('assets').update(updatePayload).eq('id', assetId)
+  if (updateError) return showServiceMessage(updateError.message, 'error')
+
+  let { error: serviceError } = await supabase.from('service_records').insert(payload)
+  if (serviceError && String(serviceError.message || '').includes('service_')) {
+    const fallbackPayload = { ...payload }
+    delete fallbackPayload.service_category
+    delete fallbackPayload.service_data
+    fallbackPayload.corrective_action = `${payload.corrective_action || ''}
+
+Workflow checks: ${serviceDataSummary(payload.service_data)}`.trim()
+    const retry = await supabase.from('service_records').insert(fallbackPayload)
+    serviceError = retry.error
+  }
+
+  await consumeSelectedPart('service', { assetId, sourceType: 'service', sourceId: null, notes: `${asset?.name || assetId}: ${payload.service_type}` })
+
+  if (serviceError) {
+    await audit('service_record_logged', 'assets', `${asset?.name || assetId}: ${payload.service_type}; condition ${payload.condition_after}; next due ${payload.next_service_due}; checks ${serviceDataSummary(payload.service_data)}; notes ${payload.corrective_action || payload.issues_found || 'none'}`)
+    showServiceMessage('Service saved to asset record. Optional service_records table not found, so full form history was written to audit log only.', 'success')
+  } else {
+    await audit('service_record_logged', 'service_records', `${asset?.name || assetId}: ${payload.service_type}`)
+    showServiceMessage('Service record saved.', 'success')
+  }
+
+  await loadData()
+  setTimeout(() => renderAssetDetail(assetId), 900)
+}
+
+function showServiceMessage(message, type = 'info') {
+  const box = document.querySelector('#serviceMessageBox') || document.querySelector('#messageBox')
+  if (!box) return alert(message)
+  box.textContent = message
+  box.className = `message ${type}`
+}
+
+function formatDate(dateValue) {
+  if (!dateValue) return '-'
+  return new Date(dateValue).toLocaleDateString()
 }
 
 function renderReports() {
@@ -954,7 +1836,7 @@ function statusClass(status = 'Operational') {
   return String(status).toLowerCase().replace(/\s+/g, '-')
 }
 
-function assetHistoryTimeline(asset, assetRepairs) {
+function assetHistoryTimeline(asset, assetRepairs, assetServices = []) {
   const items = [
     { date: asset.created_at, title: 'Asset created', body: `${asset.type || 'Asset'} registered in ${asset.location || 'no location set'}`, tone: 'created' },
     ...assetRepairs.map(r => ({
@@ -963,6 +1845,12 @@ function assetHistoryTimeline(asset, assetRepairs) {
       body: `${r.priority || 'Medium'} priority • ${r.status || 'Open'}${r.resolution_notes ? ` • ${r.resolution_notes}` : ''}`,
       tone: r.status === 'Resolved' ? 'resolved' : getRepairHealth(r).state,
       photo: r.photo_url
+    })),
+    ...assetServices.map(s => ({
+      date: s.service_date || s.created_at,
+      title: `Service completed: ${s.service_type || 'Service'}`,
+      body: `${s.condition_after || 'Condition not recorded'} • Next due ${s.next_service_due || '-'}${s.corrective_action ? ` • ${s.corrective_action}` : ''}`,
+      tone: 'service'
     }))
   ].filter(i => i.date).sort((a,b) => new Date(b.date) - new Date(a.date))
 
@@ -1006,15 +1894,8 @@ window.closeImagePreview = function closeImagePreview() {
 
 
 async function markServiced(assetId) {
-  const days = Number(prompt('Next service due in how many days?', '90') || 90)
-  const due = new Date()
-  due.setDate(due.getDate() + days)
-  const next = due.toISOString().slice(0, 10)
-  const { error } = await supabase.from('assets').update({ status: 'Operational', next_service_date: next }).eq('id', assetId)
-  if (error) return alert(error.message)
-  await audit('asset_serviced', 'assets', `Next due ${next}`)
-  await loadData()
-  renderMaintenance()
+  location.hash = `asset/${assetId}`
+  setTimeout(() => document.querySelector('#serviceType')?.focus(), 150)
 }
 
 window.markServiced = markServiced
