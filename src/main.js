@@ -12,6 +12,8 @@ let serviceRecords = []
 let partsInventory = []
 let partsUsage = []
 let activePage = 'dashboard'
+let partFilters = { type: 'All', stock: 'All', category: 'All', search: '' }
+let maintenanceFilter = 'All'
 let resolveContext = null
 let resolvingTicket = false
 
@@ -259,14 +261,18 @@ function renderDashboard() {
       </div>
     </section>
     <section class="grid two">
-      <div class="card">
+      <div class="card live-feed-card">
         <div class="section-title-row compact">
           <div>
-            <h2>Recent Assets</h2>
-            <p class="muted">Live status from service and repair activity.</p>
+            <p class="eyebrow live-feed-eyebrow">LIVE ACTIVITY</p>
+            <h2>Command Feed</h2>
+            <p class="muted">Recent movement across assets, repairs, services and parts.</p>
           </div>
+          <span class="live-pulse">LIVE</span>
         </div>
-        ${assets.slice(0, 6).map(assetRow).join('') || '<p class="muted">No assets yet.</p>'}
+        <div class="activity-feed">
+          ${activityFeedItems().map(activityRow).join('') || '<p class="muted">No recent activity detected yet.</p>'}
+        </div>
       </div>
       <div class="card smart-panel">
         <div class="section-title-row compact">
@@ -286,30 +292,135 @@ function statCard(label, value, sub) {
   return `<div class="card stat"><p>${label}</p><h2>${value}</h2><small>${sub}</small></div>`
 }
 
+function activityFeedItems() {
+  const items = []
+  assets.slice(0, 6).forEach(a => items.push({
+    type: 'asset',
+    title: 'Asset registered',
+    detail: `${a.name || 'Unnamed asset'} • ${a.type || 'Asset'}`,
+    time: a.created_at || a.updated_at,
+    tone: 'teal'
+  }))
+  repairs.slice(0, 6).forEach(r => items.push({
+    type: 'repair',
+    title: r.status === 'Resolved' ? 'Repair resolved' : 'Repair activity',
+    detail: `${r.title || 'Repair ticket'} • ${r.asset_name || 'Unknown asset'}`,
+    time: r.created_at || r.updated_at,
+    tone: r.status === 'Resolved' ? 'green' : 'amber'
+  }))
+  serviceRecords.slice(0, 6).forEach(sr => items.push({
+    type: 'service',
+    title: 'Service record logged',
+    detail: `${sr.asset_name || 'Asset'} • ${sr.service_category || sr.service_type || 'Service'}`,
+    time: sr.created_at || sr.service_date,
+    tone: 'blue'
+  }))
+  partsInventory.slice(0, 6).forEach(p => items.push({
+    type: 'part',
+    title: 'Part added',
+    detail: `${p.part_name || 'Inventory part'} • ${p.equipment_type || 'General'}`,
+    time: p.created_at || p.updated_at,
+    tone: 'purple'
+  }))
+  partsUsage.slice(0, 6).forEach(u => {
+    const part = partsInventory.find(p => p.id === u.part_id)
+    items.push({
+      type: 'stock',
+      title: 'Part used',
+      detail: `${part?.part_name || 'Inventory part'} x${u.quantity_used || 1}`,
+      time: u.created_at,
+      tone: 'red'
+    })
+  })
+  return items
+    .filter(i => i.time)
+    .sort((a, b) => new Date(b.time) - new Date(a.time))
+    .slice(0, 8)
+}
+
+function activityRow(item, index) {
+  return `
+    <div class="activity-row ${item.tone}" style="--delay:${index * 90}ms">
+      <span class="activity-dot"></span>
+      <div>
+        <strong>${escapeHtml(item.title)}</strong>
+        <small>${escapeHtml(item.detail)}</small>
+      </div>
+      <time>${formatDate(item.time)}</time>
+    </div>
+  `
+}
+
+function addAssetModal() {
+  return `
+    <div id="addAssetModal" class="asset-modal hidden" role="dialog" aria-modal="true">
+      <div class="asset-modal-backdrop" onclick="window.closeAddAssetModal()"></div>
+      <div class="asset-modal-card repair-modal-card">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">ASSET REGISTER</p>
+            <h2>Add Asset</h2>
+            <p class="muted">Create a new equipment record without cluttering the assets page.</p>
+          </div>
+          <button id="closeAddAssetModal" class="icon-btn" type="button">×</button>
+        </div>
+        <div class="asset-modal-scroll">
+          <div id="messageBox" class="message hidden"></div>
+          <div class="form-grid">
+            <input id="assetName" placeholder="Asset name" />
+            <input id="assetType" placeholder="Type e.g. 3D Printer" />
+            <input id="assetSerial" placeholder="Serial number" />
+            <input id="assetLocation" placeholder="Location" />
+            <input id="assetManufacturer" placeholder="Manufacturer" />
+            <input id="assetModel" placeholder="Model" />
+            <select id="assetStatus">${statusOptions.map(o => `<option>${o}</option>`).join('')}</select>
+            <input id="assetService" type="date" title="Next service date" />
+          </div>
+          <textarea id="assetNotes" placeholder="Notes"></textarea>
+        </div>
+        <div class="modal-actions">
+          <button id="cancelAddAsset" type="button">Cancel</button>
+          <button id="addAsset" class="primary" type="button">Add Asset</button>
+        </div>
+      </div>
+    </div>
+  `
+}
+
+function openAddAssetModal() {
+  document.body.classList.add('modal-open')
+  document.querySelector('#addAssetModal')?.classList.remove('hidden')
+  setTimeout(() => document.querySelector('#assetName')?.focus(), 50)
+}
+
+function closeAddAssetModal() {
+  document.body.classList.remove('modal-open')
+  document.querySelector('#addAssetModal')?.classList.add('hidden')
+}
+
+window.closeAddAssetModal = closeAddAssetModal
+
 function renderAssets() {
   content().innerHTML = `
-    ${renderHeader('ASSET REGISTER', 'Assets')}
-    <section class="card">
-      <h2>Add Asset</h2>
-      <div id="messageBox" class="message hidden"></div>
-      <div class="form-grid">
-        <input id="assetName" placeholder="Asset name" />
-        <input id="assetType" placeholder="Type e.g. 3D Printer" />
-        <input id="assetSerial" placeholder="Serial number" />
-        <input id="assetLocation" placeholder="Location" />
-        <input id="assetManufacturer" placeholder="Manufacturer" />
-        <input id="assetModel" placeholder="Model" />
-        <select id="assetStatus">${statusOptions.map(o => `<option>${o}</option>`).join('')}</select>
-        <input id="assetService" type="date" title="Next service date" />
+    ${renderHeader('ASSET REGISTER', 'Assets', '<button id="openAddAsset" class="primary">Add Asset</button>')}
+    <section class="card recent-assets-panel">
+      <div class="section-title-row compact">
+        <div>
+          <h2>Recent Assets</h2>
+          <p class="muted">Latest three assets added or updated in the equipment register.</p>
+        </div>
       </div>
-      <textarea id="assetNotes" placeholder="Notes"></textarea>
-      <button id="addAsset" class="primary">Add Asset</button>
+      ${assets.slice(0, 3).map(assetRow).join('') || '<p class="muted">No assets yet.</p>'}
     </section>
     <section class="card">
       <h2>Asset List</h2>
       ${assets.map(assetRow).join('') || '<p class="muted">No assets yet.</p>'}
     </section>
+    ${addAssetModal()}
   `
+  document.querySelector('#openAddAsset').onclick = openAddAssetModal
+  document.querySelector('#closeAddAssetModal').onclick = closeAddAssetModal
+  document.querySelector('#cancelAddAsset').onclick = closeAddAssetModal
   document.querySelector('#addAsset').onclick = addAsset
 }
 
@@ -414,6 +525,85 @@ function safeJson(value) {
   try { return JSON.parse(value) } catch { return {} }
 }
 
+function assetIntelligenceSummary(asset, assetServices = [], assetRepairs = []) {
+  const latest = assetServices[0]
+  const failedFindings = []
+  const upgradeNotes = []
+  const nextServiceNotes = []
+
+  assetServices.slice(0, 8).forEach(record => {
+    const data = typeof record.service_data === 'string' ? safeJson(record.service_data) : (record.service_data || {})
+    const findings = data.findings || {}
+    Object.entries(findings).forEach(([key, note]) => {
+      if (note) failedFindings.push(`${humaniseKey(key.replace(/Reason$/, ''))}: ${note}`)
+    })
+    const upgrades = data.upgradesRequired || data.agvUpgradesRequired || record.upgrades_required || ''
+    if (upgrades) upgradeNotes.push(upgrades)
+    if (record.corrective_action) nextServiceNotes.push(record.corrective_action)
+    if (record.issues_found) nextServiceNotes.push(record.issues_found)
+  })
+
+  const recurringRepairTitles = recurringItems(assetRepairs.map(r => r.title || r.description).filter(Boolean))
+  const open = assetRepairs.filter(r => r.status !== 'Resolved')
+
+  return `
+    <div class="asset-intel-grid">
+      <div class="asset-intel-panel">
+        <small>Latest service condition</small>
+        <strong>${escapeHtml(latest?.condition_after || 'No service record yet')}</strong>
+        <span>${escapeHtml(latest ? formatDate(latest.service_date || latest.created_at) : 'Run a service to populate this summary')}</span>
+      </div>
+      <div class="asset-intel-panel">
+        <small>Open engineering actions</small>
+        <strong>${open.length}</strong>
+        <span>${open.length ? 'Active repair tickets require attention' : 'No open repair tickets'}</span>
+      </div>
+      <div class="asset-intel-panel wide">
+        <small>Failed / worn checks from service reports</small>
+        ${failedFindings.slice(0, 4).map(item => `<p>${escapeHtml(item)}</p>`).join('') || '<p class="muted">No failed checks recorded from recent service forms.</p>'}
+      </div>
+      <div class="asset-intel-panel wide upgrade-panel">
+        <small>Recommendations / upgrades for next service</small>
+        ${uniqueList(upgradeNotes).slice(0, 4).map(item => `<p>${escapeHtml(item)}</p>`).join('') || '<p class="muted">No upgrade recommendations recorded for this asset.</p>'}
+      </div>
+      <div class="asset-intel-panel wide">
+        <small>Recurring repair patterns</small>
+        ${recurringRepairTitles.slice(0, 4).map(item => `<p>${escapeHtml(item)}</p>`).join('') || '<p class="muted">No recurring repair pattern detected yet.</p>'}
+      </div>
+      <div class="asset-intel-panel wide">
+        <small>Next-service planning notes</small>
+        ${uniqueList(nextServiceNotes).slice(0, 3).map(item => `<p>${escapeHtml(item)}</p>`).join('') || '<p class="muted">No next-service planning notes recorded.</p>'}
+      </div>
+    </div>
+  `
+}
+
+function humaniseKey(key = '') {
+  return String(key)
+    .replace(/^agv/i, 'AGV ')
+    .replace(/^printer/i, 'Printer ')
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function uniqueList(items = []) {
+  return [...new Set(items.map(i => String(i || '').trim()).filter(Boolean))]
+}
+
+function recurringItems(items = []) {
+  const normalised = items.map(i => String(i || '').toLowerCase().trim()).filter(Boolean)
+  const counts = {}
+  normalised.forEach(item => {
+    const key = item.slice(0, 80)
+    counts[key] = (counts[key] || 0) + 1
+  })
+  return Object.entries(counts)
+    .filter(([, count]) => count > 1)
+    .sort((a, b) => b[1] - a[1])
+    .map(([item, count]) => `${item} (${count} repeats)`)
+}
+
 async function renderAssetDetail(id) {
   await loadData()
   const a = assets.find(item => item.id === id)
@@ -445,6 +635,16 @@ async function renderAssetDetail(id) {
         <p class="muted">Latest non-pass inspection notes and actions.</p>
         ${recentServiceFindings(assetServices)}
       </div>
+    </section>
+    <section class="card asset-intelligence-summary">
+      <div class="section-title-row compact">
+        <div>
+          <p class="eyebrow">ASSET INTELLIGENCE</p>
+          <h2>Service Intelligence Summary</h2>
+          <p class="muted">Asset-specific findings pulled from previous service and repair records.</p>
+        </div>
+      </div>
+      ${assetIntelligenceSummary(a, assetServices, assetRepairs)}
     </section>
     <section class="grid two">
       <div class="card asset-health-card ${health.tone}">
@@ -798,6 +998,7 @@ async function addRepair(assetId = null) {
 }
 
 function renderRepairs() {
+  const activeRepairs = repairs.filter(r => r.status !== 'Resolved')
   content().innerHTML = `
     ${renderHeader('REPAIR CONTROL', 'Repairs')}
     <section class="card repair-form-card">
@@ -865,8 +1066,13 @@ function renderRepairs() {
       </div>
     </section>
     <section class="card">
-      <h2>Repair Tickets</h2>
-      ${repairs.map(repairRow).join('') || '<p class="muted">No repair tickets yet.</p>'}
+      <div class="section-title-row">
+        <div>
+          <h2>Active Repair Queue</h2>
+          <p class="muted">Resolved tickets are hidden here so the queue only shows work needing engineering action.</p>
+        </div>
+      </div>
+      ${activeRepairs.map(repairRow).join('') || '<p class="muted">No active repair tickets.</p>'}
     </section>
   `
   document.querySelector('#addRepair').onclick = () => addRepair()
@@ -1013,8 +1219,23 @@ async function uploadPartImage() {
 function renderPartsInventory() {
   const low = lowStockParts()
   const totalValue = partsInventory.reduce((sum, p) => sum + Number(p.price || 0) * Number(p.quantity_in_stock || 0), 0)
+  const categories = [...new Set(partsInventory.map(p => p.category).filter(Boolean))].sort()
+  const filteredParts = partsInventory.filter(part => {
+    const type = partFilters.type === 'All' || String(part.equipment_type || 'General') === partFilters.type
+    const qty = Number(part.quantity_in_stock || 0)
+    const min = Number(part.minimum_stock_level || 0)
+    const stock = partFilters.stock === 'All'
+      || (partFilters.stock === 'In Stock' && qty > min)
+      || (partFilters.stock === 'Low Stock' && qty > 0 && qty <= min)
+      || (partFilters.stock === 'Out of Stock' && qty <= 0)
+    const category = partFilters.category === 'All' || String(part.category || 'Uncategorised') === partFilters.category
+    const searchText = `${part.part_name || ''} ${part.category || ''} ${part.stock_location || ''} ${part.supplier_url || ''}`.toLowerCase()
+    const search = !partFilters.search || searchText.includes(partFilters.search.toLowerCase())
+    return type && stock && category && search
+  })
+
   content().innerHTML = `
-    ${renderHeader('PARTS & SPARES CONTROL', 'Parts Inventory', '<button id="refresh">Refresh</button>')}
+    ${renderHeader('PARTS & SPARES CONTROL', 'Parts Inventory', '<button id="openAddPart" class="primary">Add Part</button><button id="refresh">Refresh</button>')}
     <section class="stats-grid parts-stats">
       ${statCard('Parts Listed', partsInventory.length, 'Inventory records')}
       ${statCard('Low Stock', low.length, 'At or below minimum')}
@@ -1022,31 +1243,29 @@ function renderPartsInventory() {
       ${statCard('Usage Events', partsUsage.length, 'Services and repairs')}
       ${statCard('Locations', new Set(partsInventory.map(p => p.stock_location).filter(Boolean)).size, 'Stock locations')}
     </section>
-    <section class="card">
-      <h2>Add Part</h2>
-      <p class="muted">Add AGV, 3D printer or general engineering spares. Parts can then be selected on service and repair forms.</p>
-      <div id="messageBox" class="message hidden"></div>
-      <div class="form-grid">
-        <input id="partName" placeholder="Part name" />
-        <select id="partEquipmentType">
-          <option>AGV</option>
-          <option>3D Printer</option>
-          <option>General</option>
+
+    <section class="card parts-control-card">
+      <div class="section-title-row">
+        <div>
+          <h2>Parts Control</h2>
+          <p class="muted">Filter stock by equipment type, category, status or location.</p>
+        </div>
+      </div>
+      <div class="parts-filter-bar">
+        <input id="partSearch" value="${escapeHtml(partFilters.search)}" placeholder="Search parts, supplier or location..." />
+        <select id="partTypeFilter">
+          ${['All', 'AGV', '3D Printer', 'General'].map(type => `<option ${partFilters.type === type ? 'selected' : ''}>${type}</option>`).join('')}
         </select>
-        <input id="partCategory" placeholder="Category e.g. Sensor / Belt / Nozzle" />
-        <input id="partPrice" type="number" step="0.01" placeholder="Price £" />
-        <input id="partQty" type="number" step="1" placeholder="Qty currently in stock" />
-        <input id="partMinQty" type="number" step="1" placeholder="Minimum stock level" />
-        <input id="partLocation" placeholder="Location e.g. Stores A / Drawer 3" />
-        <input id="partSupplierUrl" placeholder="Supplier / part website link" />
+        <select id="partStockFilter">
+          ${['All', 'In Stock', 'Low Stock', 'Out of Stock'].map(status => `<option ${partFilters.stock === status ? 'selected' : ''}>${status}</option>`).join('')}
+        </select>
+        <select id="partCategoryFilter">
+          <option>All</option>
+          ${categories.map(cat => `<option ${partFilters.category === cat ? 'selected' : ''}>${escapeHtml(cat)}</option>`).join('')}
+        </select>
       </div>
-      <div class="form-grid">
-        <label class="file-label">Upload part image <input id="partImage" type="file" accept="image/*" /></label>
-        <input id="partImageUrl" placeholder="Or paste image URL" />
-      </div>
-      <textarea id="partNotes" placeholder="Notes, compatibility, reorder detail..."></textarea>
-      <button id="addPart" class="primary">Add Part</button>
     </section>
+
     <section class="grid two">
       <div class="card">
         <h2>Low Stock Alerts</h2>
@@ -1058,14 +1277,64 @@ function renderPartsInventory() {
       </div>
     </section>
     <section class="card">
-      <h2>Parts List</h2>
-      <div class="parts-grid">
-        ${partsInventory.map(partCard).join('') || '<p class="muted">No parts added yet. Add the V17 parts SQL table first, then create your spares list.</p>'}
+      <div class="section-title-row">
+        <div>
+          <h2>Parts List</h2>
+          <p class="muted">Showing ${filteredParts.length} of ${partsInventory.length} inventory records.</p>
+        </div>
+      </div>
+      <div class="parts-grid filtered-parts-grid">
+        ${filteredParts.map(partCard).join('') || '<p class="muted">No parts match the current filters.</p>'}
       </div>
     </section>
+
+    <div id="addPartModal" class="asset-modal hidden" role="dialog" aria-modal="true">
+      <div class="asset-modal-backdrop" onclick="window.closeAssetModal('addPartModal')"></div>
+      <div class="asset-modal-card repair-modal-card">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">PARTS & SPARES CONTROL</p>
+            <h2>Add Part</h2>
+            <p class="muted">Add AGV, 3D printer or general engineering spares for service and repair workflows.</p>
+          </div>
+          <button class="icon-btn" onclick="window.closeAssetModal('addPartModal')">×</button>
+        </div>
+        <div class="asset-modal-scroll">
+          <div id="messageBox" class="message hidden"></div>
+          <div class="form-grid">
+            <input id="partName" placeholder="Part name" />
+            <select id="partEquipmentType">
+              <option>AGV</option>
+              <option>3D Printer</option>
+              <option>General</option>
+            </select>
+            <input id="partCategory" placeholder="Category e.g. Sensor / Belt / Nozzle" />
+            <input id="partPrice" type="number" step="0.01" placeholder="Price £" />
+            <input id="partQty" type="number" step="1" placeholder="Qty currently in stock" />
+            <input id="partMinQty" type="number" step="1" placeholder="Minimum stock level" />
+            <input id="partLocation" placeholder="Location e.g. Stores A / Drawer 3" />
+            <input id="partSupplierUrl" placeholder="Supplier / part website link" />
+          </div>
+          <div class="form-grid">
+            <label class="file-label">Upload part image <input id="partImage" type="file" accept="image/*" /></label>
+            <input id="partImageUrl" placeholder="Or paste image URL" />
+          </div>
+          <textarea id="partNotes" placeholder="Notes, compatibility, reorder detail..."></textarea>
+        </div>
+        <div class="modal-actions">
+          <button onclick="window.closeAssetModal('addPartModal')">Cancel</button>
+          <button id="addPart" class="primary">Add Part</button>
+        </div>
+      </div>
+    </div>
   `
   document.querySelector('#refresh').onclick = async () => { await loadData(); renderPartsInventory() }
+  document.querySelector('#openAddPart').onclick = () => window.openAssetModal('addPartModal')
   document.querySelector('#addPart').onclick = addPart
+  document.querySelector('#partSearch').oninput = event => { partFilters.search = event.target.value; renderPartsInventory() }
+  document.querySelector('#partTypeFilter').onchange = event => { partFilters.type = event.target.value; renderPartsInventory() }
+  document.querySelector('#partStockFilter').onchange = event => { partFilters.stock = event.target.value; renderPartsInventory() }
+  document.querySelector('#partCategoryFilter').onchange = event => { partFilters.category = event.target.value; renderPartsInventory() }
 }
 
 async function addPart() {
@@ -1120,32 +1389,170 @@ function partsUsageRow(row) {
 
 function renderMaintenance() {
   const today = new Date().toISOString().slice(0, 10)
-  const dueAssets = assets
+  const filteredAssets = assets
+    .filter(a => {
+      if (maintenanceFilter === 'All') return true
+      if (maintenanceFilter === 'Overdue') return isServiceOverdue(a)
+      if (maintenanceFilter === 'AGV') return isAgvAsset(a)
+      if (maintenanceFilter === '3D Printer') return isPrinterAsset(a)
+      return true
+    })
     .slice()
-    .sort((a, b) => String(a.next_service_date || '9999').localeCompare(String(b.next_service_date || '9999')))
+    .sort((a, b) => serviceSortScore(a) - serviceSortScore(b))
+
+  const overdueCount = assets.filter(a => isServiceOverdue(a)).length
+  const upcomingCount = assets.filter(a => serviceDaysUntil(a) >= 0 && serviceDaysUntil(a) <= 30).length
+  const upgradeCount = serviceRecords.filter(r => hasUpgradeRequirement(r)).length
 
   content().innerHTML = `
     ${renderHeader('PLANNED MAINTENANCE', 'Maintenance')}
-    <section class="card">
-      <h2>Service Schedule</h2>
-      <p class="muted">Use the service form to record what was inspected, what was found and when the next service is due.</p>
-      ${dueAssets.map(a => serviceScheduleRow(a, today)).join('') || '<p class="muted">No assets to schedule.</p>'}
+    <section class="stats-grid fleet-stats maintenance-planning-stats">
+      ${statCard('Upcoming Services', upcomingCount, 'Due within 30 days')}
+      ${statCard('Overdue Services', overdueCount, 'Need engineering action')}
+      ${statCard('Planned Upgrades', upgradeCount, 'Raised from service findings')}
     </section>
-    <section class="card">
-      <h2>Recent Service Records</h2>
-      ${serviceRecords.slice(0, 12).map(serviceRecordRow).join('') || '<p class="muted">No service records yet. Add the optional V16 service_records table to retain full form history.</p>'}
+    <section class="card maintenance-control-card service-planning-board">
+      <div class="section-title-row">
+        <div>
+          <h2>Service Planning Board</h2>
+          <p class="muted">Upcoming service work, previous findings and upgrade actions from previous reports.</p>
+        </div>
+      </div>
+      <div class="parts-filter-bar maintenance-filter-bar">
+        ${['All', 'AGV', '3D Printer', 'Overdue'].map(filter => `<button class="filter-pill ${maintenanceFilter === filter ? 'active' : ''}" onclick="window.setMaintenanceFilter('${filter}')">${filter}</button>`).join('')}
+      </div>
+      <div class="service-plan-grid">
+        ${filteredAssets.map(servicePlanningTile).join('') || '<p class="muted">No assets match this maintenance view.</p>'}
+      </div>
     </section>
-    <section class="card">
-      <h2>Maintenance Tasks</h2>
-      ${maintenance.map(t => `
-        <div class="data-row">
-          <div>
-            <h3>${escapeHtml(t.title || 'Task')}</h3>
-            <p>${escapeHtml(t.status || 'Open')} • Due: ${escapeHtml(t.due_date || '-')}</p>
-          </div>
-        </div>`).join('') || '<p class="muted">No extra maintenance tasks.</p>'}
+    <section class="grid two">
+      <div class="card service-records-card">
+        <h2>Recent Service Findings</h2>
+        ${serviceRecords.slice(0, 8).map(serviceRecordRow).join('') || '<p class="muted">No service records yet. Add the optional V16 service_records table to retain full form history.</p>'}
+      </div>
+      <div class="card service-records-card">
+        <h2>Maintenance Tasks</h2>
+        ${maintenance.map(t => `
+          <div class="data-row">
+            <div>
+              <h3>${escapeHtml(t.title || 'Task')}</h3>
+              <p>${escapeHtml(t.status || 'Open')} • Due: ${escapeHtml(t.due_date || '-')}</p>
+            </div>
+          </div>`).join('') || '<p class="muted">No extra maintenance tasks.</p>'}
+      </div>
     </section>
   `
+}
+
+function setMaintenanceFilter(filter) {
+  maintenanceFilter = filter
+  renderMaintenance()
+}
+window.setMaintenanceFilter = setMaintenanceFilter
+
+function servicePlanningTile(asset) {
+  const health = calculateAssetHealth(asset)
+  const lastService = latestServiceForAsset(asset)
+  const openRepairs = repairs.filter(r => r.asset_id === asset.id && r.status !== 'Resolved')
+  const due = serviceDueText(asset)
+  const priority = servicePriority(asset, health, lastService, openRepairs)
+  const upgrades = plannedUpgradeText(lastService)
+  const findings = serviceFindingSummary(lastService || {}) || lastService?.issues_found || lastService?.corrective_action || 'No recent service findings recorded.'
+  const className = priority.tone
+  return `
+    <article class="service-plan-card ${className}">
+      <div class="service-plan-head">
+        <div>
+          <p class="eyebrow">${escapeHtml(asset.type || 'Asset')}</p>
+          <h2>${escapeHtml(asset.name || 'Unnamed asset')}</h2>
+          <p>${escapeHtml(asset.location || 'No location')}</p>
+        </div>
+        <span class="service-priority-pill ${className}">${priority.label}</span>
+      </div>
+      <div class="service-plan-metrics">
+        <span><b>${escapeHtml(due.value)}</b><small>${escapeHtml(due.label)}</small></span>
+        <span><b>${escapeHtml(lastService?.condition_after || 'Unknown')}</b><small>Last condition</small></span>
+        <span><b>${openRepairs.length}</b><small>Open faults</small></span>
+      </div>
+      <div class="service-plan-section">
+        <small>Last service finding</small>
+        <p>${escapeHtml(findings)}</p>
+      </div>
+      <div class="service-plan-section upgrade-section">
+        <small>Planned upgrades / actions</small>
+        <p>${escapeHtml(upgrades)}</p>
+      </div>
+      <div class="action-buttons">
+        <button onclick="location.hash='asset/${asset.id}'">Open Record</button>
+        <button class="primary" onclick="location.hash='asset/${asset.id}'">Service</button>
+      </div>
+    </article>
+  `
+}
+
+function latestServiceForAsset(asset) {
+  return serviceRecords.find(r => r.asset_id === asset.id || r.asset_name === asset.name)
+}
+
+function serviceDaysUntil(asset) {
+  if (!asset.next_service_date) return 9999
+  const start = new Date(new Date().toISOString().slice(0, 10)).getTime()
+  const due = new Date(asset.next_service_date).getTime()
+  return Math.ceil((due - start) / 864e5)
+}
+
+function serviceDueText(asset) {
+  if (!asset.next_service_date) return { value: 'Not set', label: 'Next service' }
+  const days = serviceDaysUntil(asset)
+  if (days < 0) return { value: `${Math.abs(days)}d overdue`, label: 'Service status' }
+  if (days === 0) return { value: 'Due today', label: 'Service status' }
+  if (days <= 30) return { value: `${days}d`, label: 'Until service' }
+  return { value: formatDate(asset.next_service_date), label: 'Next service' }
+}
+
+function serviceSortScore(asset) {
+  const days = serviceDaysUntil(asset)
+  return days === 9999 ? 9999 : days
+}
+
+function servicePriority(asset, health, lastService, openRepairs) {
+  const days = serviceDaysUntil(asset)
+  const unsafe = String(lastService?.condition_after || '').toLowerCase().includes('unsafe')
+  const followUp = String(lastService?.condition_after || '').toLowerCase().includes('follow') || hasUpgradeRequirement(lastService)
+  if (unsafe || health.score < 45 || days < 0) return { label: 'Urgent', tone: 'critical' }
+  if (openRepairs.length || followUp || health.score < 70 || days <= 14) return { label: 'Plan Soon', tone: 'watch' }
+  if (days <= 30) return { label: 'Upcoming', tone: 'scheduled' }
+  return { label: 'Scheduled', tone: 'healthy' }
+}
+
+function hasUpgradeRequirement(record = {}) {
+  if (!record) return false
+  const data = typeof record.service_data === 'string' ? safeJson(record.service_data) : (record.service_data || {})
+  return Boolean(data.upgradesRequired || record.corrective_action?.toLowerCase?.().includes('upgrade') || record.issues_found?.toLowerCase?.().includes('upgrade'))
+}
+
+function plannedUpgradeText(record = {}) {
+  if (!record) return 'No planned upgrades logged from the last service.'
+  const data = typeof record.service_data === 'string' ? safeJson(record.service_data) : (record.service_data || {})
+  return data.upgradesRequired || data.firmwareNotes || record.corrective_action || 'No planned upgrades logged from the last service.'
+}
+
+function likelyPartsForAsset(asset, lastService, openRepairs) {
+  const serviceParts = lastService?.parts_replaced || ''
+  const repairParts = openRepairs.map(r => r.parts_used).filter(Boolean).join(' • ')
+  const text = [serviceParts, repairParts].filter(Boolean).join(' • ')
+  if (text) return text
+  const type = isAgvAsset(asset) ? 'AGV' : isPrinterAsset(asset) ? '3D Printer' : 'General'
+  const matchingParts = partsInventory
+    .filter(p => String(p.equipment_type || 'General').toLowerCase().includes(type.toLowerCase()) || String(p.equipment_type || '').toLowerCase() === 'general')
+    .slice(0, 3)
+    .map(p => p.part_name)
+    .filter(Boolean)
+  return matchingParts.length ? matchingParts.join(' • ') : 'No stock parts linked yet.'
+}
+
+function maintenanceTile(a) {
+  return servicePlanningTile(a)
 }
 
 function serviceScheduleRow(a, today) {
@@ -1805,6 +2212,96 @@ function barList(items) {
 }
 
 
+
+function generateMaintenanceReport(type, id) {
+  const record = type === 'service'
+    ? serviceRecords.find(item => item.id === id)
+    : repairs.find(item => item.id === id)
+  if (!record) return toast('Report record not found.', 'error')
+  const asset = assets.find(a => a.id === record.asset_id) || { name: record.asset_name || 'Unknown asset' }
+  const html = type === 'service' ? serviceReportHtml(record, asset) : repairReportHtml(record, asset)
+  openPrintReport(html)
+}
+
+function serviceReportHtml(record, asset) {
+  const data = typeof record.service_data === 'string' ? safeJson(record.service_data) : (record.service_data || {})
+  const findings = data.findings || {}
+  const checkRows = Object.entries(data)
+    .filter(([key]) => key !== 'findings')
+    .map(([key, value]) => `<tr><th>${escapeHtml(humaniseKey(key))}</th><td>${escapeHtml(value || '-')}</td><td>${escapeHtml(findings[`${key}Reason`] || '')}</td></tr>`)
+    .join('')
+  return reportShell('Service Report', asset, `
+    <section><h2>Service Details</h2>
+      <div class="report-grid">
+        ${reportField('Service type', record.service_type)}
+        ${reportField('Engineer', record.engineer_name)}
+        ${reportField('Service date', formatDate(record.service_date || record.created_at))}
+        ${reportField('Next service due', formatDate(record.next_service_due))}
+        ${reportField('Condition after service', record.condition_after)}
+        ${reportField('Downtime hours', record.downtime_hours)}
+      </div>
+    </section>
+    <section><h2>Inspection Checks</h2>
+      <table><thead><tr><th>Check</th><th>Result</th><th>Failure / action note</th></tr></thead><tbody>${checkRows || '<tr><td colspan="3">No structured checks recorded.</td></tr>'}</tbody></table>
+    </section>
+    <section><h2>Engineering Notes</h2>
+      ${reportText('Issues found', record.issues_found)}
+      ${reportText('Corrective action', record.corrective_action)}
+      ${reportText('Parts replaced / used', record.parts_replaced)}
+    </section>
+  `)
+}
+
+function repairReportHtml(record, asset) {
+  return reportShell('Repair Report', asset, `
+    <section><h2>Repair Details</h2>
+      <div class="report-grid">
+        ${reportField('Fault title', record.title)}
+        ${reportField('Priority', record.priority)}
+        ${reportField('Status', record.status)}
+        ${reportField('Opened', formatDate(record.created_at))}
+        ${reportField('Resolved', formatDate(record.resolved_at))}
+        ${reportField('Downtime hours', record.downtime_hours)}
+        ${reportField('Cost', record.cost ? `£${Number(record.cost).toFixed(2)}` : '-')}
+      </div>
+    </section>
+    <section><h2>Fault & Resolution</h2>
+      ${reportText('Fault description', record.description)}
+      ${reportText('Resolution notes', record.resolution_notes)}
+      ${reportText('Parts used', record.parts_used)}
+    </section>
+    ${record.photo_url ? `<section><h2>Attached Evidence</h2><img class="report-photo" src="${escapeHtml(record.photo_url)}" /></section>` : ''}
+  `)
+}
+
+function reportShell(title, asset, body) {
+  const now = new Date().toLocaleString()
+  return `<!doctype html><html><head><title>${escapeHtml(title)}</title><style>
+    body{font-family:Arial,sans-serif;color:#101820;margin:36px;line-height:1.45}header{border-bottom:3px solid #0b6b58;padding-bottom:16px;margin-bottom:24px}h1{margin:0;font-size:30px}h2{color:#0b6b58;margin-top:24px}.meta{color:#53636a}.report-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.field{border:1px solid #d8e1e4;border-radius:10px;padding:10px}.field small{display:block;color:#53636a;text-transform:uppercase;font-weight:bold;font-size:10px}.field b{display:block;margin-top:4px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border:1px solid #d8e1e4;padding:8px;text-align:left;vertical-align:top}th{background:#eef7f5}.text-block{border:1px solid #d8e1e4;border-radius:10px;padding:10px;margin:10px 0}.signature{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:42px}.sig-line{border-top:1px solid #333;padding-top:8px}.report-photo{max-width:360px;border:1px solid #ddd;border-radius:8px}@media print{button{display:none}body{margin:20mm}}
+  </style></head><body><header><p class="meta">MaintenanceOS • Medstrom Engineering</p><h1>${escapeHtml(title)}</h1><p class="meta">Generated: ${escapeHtml(now)}</p></header>
+  <section><h2>Asset</h2><div class="report-grid">
+    ${reportField('Asset name', asset.name)}${reportField('Type', asset.type)}${reportField('Location', asset.location)}${reportField('Serial', asset.serial_number)}${reportField('Status', asset.status)}${reportField('Model', asset.model)}
+  </div></section>${body}<section class="signature"><div class="sig-line">Engineer signature</div><div class="sig-line">Approved by / date</div></section><script>window.onload=()=>setTimeout(()=>window.print(),250)</script></body></html>`
+}
+
+function reportField(label, value) {
+  return `<div class="field"><small>${escapeHtml(label)}</small><b>${escapeHtml(value ?? '-')}</b></div>`
+}
+
+function reportText(label, value) {
+  return `<div class="text-block"><strong>${escapeHtml(label)}</strong><p>${escapeHtml(value || '-')}</p></div>`
+}
+
+function openPrintReport(html) {
+  const win = window.open('', '_blank')
+  if (!win) return toast('Popup blocked. Allow popups to generate PDF reports.', 'error')
+  win.document.open()
+  win.document.write(html)
+  win.document.close()
+}
+
+window.generateMaintenanceReport = generateMaintenanceReport
+
 window.resolveRepair = resolveRepair
 
 window.toast = toast
@@ -1844,13 +2341,17 @@ function assetHistoryTimeline(asset, assetRepairs, assetServices = []) {
       title: r.status === 'Resolved' ? `Repair resolved: ${r.title || 'Ticket'}` : `Repair logged: ${r.title || 'Ticket'}`,
       body: `${r.priority || 'Medium'} priority • ${r.status || 'Open'}${r.resolution_notes ? ` • ${r.resolution_notes}` : ''}`,
       tone: r.status === 'Resolved' ? 'resolved' : getRepairHealth(r).state,
-      photo: r.photo_url
+      photo: r.photo_url,
+      reportType: r.status === 'Resolved' ? 'repair' : null,
+      reportId: r.id
     })),
     ...assetServices.map(s => ({
       date: s.service_date || s.created_at,
       title: `Service completed: ${s.service_type || 'Service'}`,
       body: `${s.condition_after || 'Condition not recorded'} • Next due ${s.next_service_due || '-'}${s.corrective_action ? ` • ${s.corrective_action}` : ''}`,
-      tone: 'service'
+      tone: 'service',
+      reportType: 'service',
+      reportId: s.id
     }))
   ].filter(i => i.date).sort((a,b) => new Date(b.date) - new Date(a.date))
 
@@ -1864,6 +2365,7 @@ function assetHistoryTimeline(asset, assetRepairs, assetServices = []) {
         <span>${new Date(i.date).toLocaleString()}</span>
         <p>${escapeHtml(i.body)}</p>
         ${i.photo ? `<img class="timeline-thumb" src="${escapeHtml(i.photo)}" onclick="window.openImagePreview('${escapeHtml(i.photo)}', '${escapeHtml(i.title)}')" />` : ''}
+        ${i.reportType ? `<button class="report-btn" onclick="window.generateMaintenanceReport('${i.reportType}', '${i.reportId}')">Generate ${i.reportType === 'service' ? 'Service' : 'Repair'} PDF</button>` : ''}
       </div>
     </div>`).join('')}</div>`
 }
