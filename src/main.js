@@ -11,6 +11,7 @@ let maintenance = []
 let serviceRecords = []
 let partsInventory = []
 let partsUsage = []
+let partsHistory = []
 let activePage = 'dashboard'
 let partFilters = { type: 'All', stock: 'All', category: 'All', search: '' }
 let maintenanceFilter = 'Upcoming'
@@ -95,13 +96,14 @@ function renderAuth() {
 }
 
 async function loadData() {
-  const [assetResult, repairResult, maintenanceResult, serviceResult, partsResult, usageResult] = await Promise.all([
+  const [assetResult, repairResult, maintenanceResult, serviceResult, partsResult, usageResult, historyResult] = await Promise.all([
     safeAssetsQuery(),
     supabase.from('repair_tickets').select('*').order('created_at', { ascending: false }),
     supabase.from('maintenance_tasks').select('*').order('due_date', { ascending: true }),
     supabase.from('service_records').select('*').order('service_date', { ascending: false }),
     supabase.from('parts_inventory').select('*').order('part_name', { ascending: true }),
-    supabase.from('parts_usage').select('*').order('created_at', { ascending: false })
+    supabase.from('parts_usage').select('*').order('created_at', { ascending: false }),
+    supabase.from('parts_history').select('*').order('created_at', { ascending: false })
   ])
 
   if (assetResult.error) console.warn(assetResult.error.message)
@@ -110,6 +112,7 @@ async function loadData() {
   if (serviceResult.error && !String(serviceResult.error.message).includes('service_records')) console.warn(serviceResult.error.message)
   if (partsResult?.error && !String(partsResult.error.message).includes('parts_inventory')) console.warn(partsResult.error.message)
   if (usageResult?.error && !String(usageResult.error.message).includes('parts_usage')) console.warn(usageResult.error.message)
+  if (historyResult?.error && !String(historyResult.error.message).includes('parts_history')) console.warn(historyResult.error.message)
 
   assets = assetResult.data || []
   repairs = repairResult.data || []
@@ -117,6 +120,7 @@ async function loadData() {
   serviceRecords = serviceResult.data || []
   partsInventory = partsResult?.data || []
   partsUsage = usageResult?.data || []
+  partsHistory = historyResult?.data || []
 }
 
 async function safeAssetsQuery() {
@@ -1204,29 +1208,54 @@ async function consumeSelectedPart(prefix, { assetId, sourceType, sourceId = nul
   }
   const { error: usageError } = await supabase.from('parts_usage').insert(usagePayload)
   if (usageError) console.warn('Part usage history skipped:', usageError.message)
+  await logPartHistory(selected.part.id, 'stock_used', {
+    quantityDelta: -selected.qty,
+    previousQuantity: current,
+    newQuantity: nextQty,
+    notes: `${sourceType || 'usage'}: ${notes || 'stock consumed'}`
+  })
   await audit('part_stock_deducted', 'parts_inventory', `${selected.part.part_name || selected.part.name} x${selected.qty}; ${current} -> ${nextQty}`)
+}
+
+async function logPartHistory(partId, eventType, { quantityDelta = null, previousQuantity = null, newQuantity = null, notes = '' } = {}) {
+  if (!partId) return
+  try {
+    const { error } = await supabase.from('parts_history').insert({
+      part_id: partId,
+      event_type: eventType,
+      quantity_delta: quantityDelta,
+      previous_quantity: previousQuantity,
+      new_quantity: newQuantity,
+      notes,
+      user_email: session?.user?.email || 'unknown'
+    })
+    if (error) console.warn('Part history skipped:', error.message)
+  } catch (err) {
+    console.warn('Part history skipped:', err.message)
+  }
 }
 
 function lowStockParts() {
   return partsInventory.filter(p => Number(p.quantity_in_stock || 0) <= Number(p.minimum_stock_level || 0))
 }
 
-async function uploadPartImage() {
-  const input = document.querySelector('#partImage')
+async function uploadPartImage(inputSelector = '#partImage', urlSelector = '#partImageUrl') {
+  const input = document.querySelector(inputSelector)
   const file = input?.files?.[0]
-  if (!file) return value('#partImageUrl') || null
+  if (!file) return value(urlSelector) || null
   const safeName = file.name.replace(/[^a-z0-9.\-_]/gi, '_')
   const path = `${Date.now()}-${safeName}`
   const { error } = await supabase.storage.from('part-images').upload(path, file, { upsert: false })
   if (error) {
     showMessage(`Part image upload skipped: ${error.message}. You can paste an image URL instead.`, 'error')
-    return value('#partImageUrl') || null
+    return value(urlSelector) || null
   }
   const { data } = supabase.storage.from('part-images').getPublicUrl(path)
   return data?.publicUrl || null
 }
 
 function renderPartsInventory() {
+  document.body.classList.remove('modal-open')
   const low = lowStockParts()
   const totalValue = partsInventory.reduce((sum, p) => sum + Number(p.price || 0) * Number(p.quantity_in_stock || 0), 0)
   const categories = [...new Set(partsInventory.map(p => p.category).filter(Boolean))].sort()
@@ -1362,8 +1391,9 @@ async function addPart() {
     image_url: await uploadPartImage(),
     notes: value('#partNotes')
   }
-  const { error } = await supabase.from('parts_inventory').insert(payload)
+  const { data, error } = await supabase.from('parts_inventory').insert(payload).select().single()
   if (error) return showMessage(error.message || 'Could not add part. Add the V17 parts SQL table first.', 'error')
+  await logPartHistory(data?.id, 'part_created', { previousQuantity: 0, newQuantity: payload.quantity_in_stock, quantityDelta: payload.quantity_in_stock, notes: `Created part record: ${partName}` })
   await audit('part_created', 'parts_inventory', partName)
   await loadData()
   renderPartsInventory()
@@ -1374,18 +1404,213 @@ function partCard(part) {
   const min = Number(part.minimum_stock_level || 0)
   const low = qty <= min
   return `
-    <article class="part-card ${low ? 'low-stock' : ''}">
+    <article class="part-card ${low ? 'low-stock' : ''}" onclick="window.viewPart('${part.id}')">
       <div class="part-image-wrap">${part.image_url ? `<img src="${escapeHtml(part.image_url)}" alt="${escapeHtml(part.part_name || 'Part')}" />` : '<div class="part-placeholder">PART</div>'}</div>
       <div>
         <p class="eyebrow">${escapeHtml(part.equipment_type || 'General')}</p>
         <h3>${escapeHtml(part.part_name || 'Unnamed part')}</h3>
         <p>${escapeHtml(part.category || 'Uncategorised')} • ${escapeHtml(part.stock_location || 'No location')}</p>
         <div class="part-meta"><span>£${Number(part.price || 0).toFixed(2)}</span><span class="${low ? 'danger-text' : ''}">${qty} in stock</span><span>Min ${min}</span></div>
-        ${part.supplier_url ? `<button onclick="window.open('${escapeHtml(part.supplier_url)}', '_blank')">Open Supplier</button>` : ''}
+        <div class="part-card-actions">
+          <button onclick="event.stopPropagation(); window.viewPart('${part.id}')">Details</button>
+          <button onclick="event.stopPropagation(); window.editPart('${part.id}')">Edit</button>
+          ${part.supplier_url ? `<button onclick="event.stopPropagation(); window.open('${escapeHtml(part.supplier_url)}', '_blank')">Supplier</button>` : ''}
+        </div>
       </div>
     </article>
   `
 }
+
+
+function partHistoryItems(partId) {
+  const usageItems = partsUsage.filter(u => u.part_id === partId).map(u => {
+    const asset = assets.find(a => a.id === u.asset_id)
+    return {
+      date: u.created_at,
+      title: `Used ${u.quantity_used || 1} part${Number(u.quantity_used || 1) === 1 ? '' : 's'}`,
+      detail: `${asset?.name || 'Unknown asset'} • ${u.source_type || 'usage'}${u.notes ? ` • ${u.notes}` : ''}`
+    }
+  })
+  const historyItems = partsHistory.filter(h => h.part_id === partId).map(h => ({
+    date: h.created_at,
+    title: humanPartEvent(h.event_type),
+    detail: `${h.previous_quantity ?? '-'} → ${h.new_quantity ?? '-'}${h.quantity_delta !== null && h.quantity_delta !== undefined ? ` (${Number(h.quantity_delta) > 0 ? '+' : ''}${h.quantity_delta})` : ''}${h.notes ? ` • ${h.notes}` : ''}`
+  }))
+  return [...usageItems, ...historyItems]
+    .filter(i => i.date)
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+}
+
+function humanPartEvent(eventType) {
+  const map = {
+    part_created: 'Part record created',
+    part_updated: 'Part details updated',
+    stock_adjusted: 'Stock adjusted',
+    stock_used: 'Stock consumed',
+    supplier_updated: 'Supplier updated',
+    location_updated: 'Stock location updated'
+  }
+  return map[eventType] || String(eventType || 'Part event').replaceAll('_', ' ')
+}
+
+function viewPart(partId) {
+  const part = partsInventory.find(p => p.id === partId)
+  if (!part) return
+  const qty = Number(part.quantity_in_stock || 0)
+  const min = Number(part.minimum_stock_level || 0)
+  const used = partsUsage.filter(u => u.part_id === part.id).reduce((sum, u) => sum + Number(u.quantity_used || 0), 0)
+  const history = partHistoryItems(part.id)
+  removePartModals()
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="partDetailModal" class="asset-modal" role="dialog" aria-modal="true">
+      <div class="asset-modal-backdrop" onclick="window.closePartDetail()"></div>
+      <div class="asset-modal-card repair-modal-card part-detail-modal-card">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">PART ID RECORD</p>
+            <h2>${escapeHtml(part.part_name || 'Unnamed part')}</h2>
+            <p class="muted">${escapeHtml(part.equipment_type || 'General')} • ${escapeHtml(part.category || 'Uncategorised')}</p>
+          </div>
+          <button class="icon-btn" onclick="window.closePartDetail()">×</button>
+        </div>
+        <div class="asset-modal-scroll">
+          <div class="part-detail-layout">
+            <div class="part-detail-image">${part.image_url ? `<img src="${escapeHtml(part.image_url)}" alt="${escapeHtml(part.part_name || 'Part')}" />` : '<div class="part-placeholder large">PART</div>'}</div>
+            <div class="part-detail-info">
+              <div class="mini-grid">
+                ${infoMini('In stock', qty)}
+                ${infoMini('Minimum', min)}
+                ${infoMini('Used recorded', used)}
+                ${infoMini('Stock value', `£${(qty * Number(part.price || 0)).toFixed(2)}`)}
+              </div>
+              <div class="detail-list">
+                <p><strong>Location:</strong> ${escapeHtml(part.stock_location || 'No location recorded')}</p>
+                <p><strong>Price:</strong> £${Number(part.price || 0).toFixed(2)}</p>
+                <p><strong>Supplier:</strong> ${part.supplier_url ? `<a href="${escapeHtml(part.supplier_url)}" target="_blank" rel="noreferrer">Open supplier link</a>` : 'No supplier link recorded'}</p>
+                <p><strong>Notes:</strong> ${escapeHtml(part.notes || 'No notes recorded')}</p>
+              </div>
+            </div>
+          </div>
+          <div class="card nested-card">
+            <h3>Part History</h3>
+            ${history.length ? history.map(h => `<div class="data-row"><div><h3>${escapeHtml(h.title)}</h3><p>${escapeHtml(h.detail)}</p><small>${formatDate(h.date)}</small></div></div>`).join('') : '<p class="muted">No part history recorded yet.</p>'}
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button onclick="window.editPart('${part.id}')">Edit Part</button>
+          <button onclick="window.closePartDetail()" class="primary">Close</button>
+        </div>
+      </div>
+    </div>
+  `)
+  document.body.classList.add('modal-open')
+}
+
+function infoMini(label, value) {
+  return `<div class="mini-stat"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`
+}
+
+function editPart(partId) {
+  const part = partsInventory.find(p => p.id === partId)
+  if (!part) return
+  removePartModals()
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="partEditModal" class="asset-modal" role="dialog" aria-modal="true">
+      <div class="asset-modal-backdrop" onclick="window.closePartDetail()"></div>
+      <div class="asset-modal-card repair-modal-card">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">UPDATE PART ID RECORD</p>
+            <h2>Edit Part</h2>
+            <p class="muted">Adjust stock, supplier, location and compatibility details.</p>
+          </div>
+          <button class="icon-btn" onclick="window.closePartDetail()">×</button>
+        </div>
+        <div class="asset-modal-scroll">
+          <div id="messageBox" class="message hidden"></div>
+          <div class="form-grid">
+            <input id="editPartName" value="${escapeHtml(part.part_name || '')}" placeholder="Part name" />
+            <select id="editPartEquipmentType">
+              ${['AGV', '3D Printer', 'General'].map(t => `<option ${String(part.equipment_type || 'General') === t ? 'selected' : ''}>${t}</option>`).join('')}
+            </select>
+            <input id="editPartCategory" value="${escapeHtml(part.category || '')}" placeholder="Category" />
+            <input id="editPartPrice" type="number" step="0.01" value="${escapeHtml(part.price || 0)}" placeholder="Price £" />
+            <input id="editPartQty" type="number" step="1" value="${escapeHtml(part.quantity_in_stock || 0)}" placeholder="Qty currently in stock" />
+            <input id="editPartMinQty" type="number" step="1" value="${escapeHtml(part.minimum_stock_level || 0)}" placeholder="Minimum stock level" />
+            <input id="editPartLocation" value="${escapeHtml(part.stock_location || '')}" placeholder="Location" />
+            <input id="editPartSupplierUrl" value="${escapeHtml(part.supplier_url || '')}" placeholder="Supplier / part website link" />
+          </div>
+          <div class="form-grid">
+            <label class="file-label">Replace part image <input id="editPartImage" type="file" accept="image/*" /></label>
+            <input id="editPartImageUrl" value="${escapeHtml(part.image_url || '')}" placeholder="Or paste image URL" />
+          </div>
+          <textarea id="editPartNotes" placeholder="Notes, compatibility, reorder detail...">${escapeHtml(part.notes || '')}</textarea>
+        </div>
+        <div class="modal-actions">
+          <button onclick="window.closePartDetail()">Cancel</button>
+          <button class="primary" onclick="window.updatePart('${part.id}')">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  `)
+  document.body.classList.add('modal-open')
+}
+
+async function updatePart(partId) {
+  const part = partsInventory.find(p => p.id === partId)
+  if (!part) return
+  const previousQty = Number(part.quantity_in_stock || 0)
+  const newQty = Number(value('#editPartQty') || 0)
+  const imageUrl = await uploadPartImage('#editPartImage', '#editPartImageUrl')
+  const payload = {
+    part_name: value('#editPartName'),
+    equipment_type: value('#editPartEquipmentType') || 'General',
+    category: value('#editPartCategory'),
+    price: value('#editPartPrice') ? Number(value('#editPartPrice')) : 0,
+    supplier_url: value('#editPartSupplierUrl'),
+    quantity_in_stock: newQty,
+    minimum_stock_level: value('#editPartMinQty') ? Number(value('#editPartMinQty')) : 0,
+    stock_location: value('#editPartLocation'),
+    image_url: imageUrl,
+    notes: value('#editPartNotes'),
+    updated_at: new Date().toISOString()
+  }
+  const { error } = await supabase.from('parts_inventory').update(payload).eq('id', partId)
+  if (error) return showMessage(error.message || 'Could not update part.', 'error')
+
+  const changes = []
+  if (previousQty !== newQty) {
+    changes.push(`stock ${previousQty} -> ${newQty}`)
+    await logPartHistory(partId, 'stock_adjusted', { quantityDelta: newQty - previousQty, previousQuantity: previousQty, newQuantity: newQty, notes: 'Manual stock adjustment' })
+  }
+  if (String(part.stock_location || '') !== String(payload.stock_location || '')) {
+    changes.push(`location ${part.stock_location || '-'} -> ${payload.stock_location || '-'}`)
+    await logPartHistory(partId, 'location_updated', { previousQuantity: previousQty, newQuantity: newQty, notes: `Location changed to ${payload.stock_location || '-'}` })
+  }
+  if (String(part.supplier_url || '') !== String(payload.supplier_url || '')) {
+    changes.push('supplier link updated')
+    await logPartHistory(partId, 'supplier_updated', { previousQuantity: previousQty, newQuantity: newQty, notes: 'Supplier link updated' })
+  }
+  await logPartHistory(partId, 'part_updated', { previousQuantity: previousQty, newQuantity: newQty, notes: changes.join(' • ') || 'Part details updated' })
+  await audit('part_updated', 'parts_inventory', `${payload.part_name || part.part_name}: ${changes.join(' • ') || 'details updated'}`)
+  await loadData()
+  renderPartsInventory()
+}
+
+function removePartModals() {
+  document.querySelector('#partDetailModal')?.remove()
+  document.querySelector('#partEditModal')?.remove()
+}
+
+function closePartDetail() {
+  removePartModals()
+  if (!document.querySelector('.asset-modal:not(.hidden)')) document.body.classList.remove('modal-open')
+}
+
+window.viewPart = viewPart
+window.editPart = editPart
+window.updatePart = updatePart
+window.closePartDetail = closePartDetail
 
 function partAlertRow(part) {
   return `<div class="data-row overdue"><div><h3>${escapeHtml(part.part_name)}</h3><p>${escapeHtml(part.stock_location || 'No location')} • ${escapeHtml(part.equipment_type || 'General')}</p><small>${Number(part.quantity_in_stock || 0)} in stock / minimum ${Number(part.minimum_stock_level || 0)}</small></div></div>`
