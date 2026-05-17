@@ -1424,3 +1424,15 @@ body.modal-open { overflow: hidden; }
 @media (max-width: 900px) {
   .part-detail-layout, .mini-grid { grid-template-columns: 1fr; }
 }
+
+/* V18E Resin / Wash & Cure workflow accents */
+.service-workflow-banner.resin-printer {
+  border-color: rgba(156,132,255,.36);
+  background: linear-gradient(135deg, rgba(156,132,255,.13), rgba(93,182,255,.08));
+  box-shadow: 0 0 34px rgba(156,132,255,.09);
+}
+.service-workflow-banner.wash-cure {
+  border-color: rgba(93,182,255,.36);
+  background: linear-gradient(135deg, rgba(93,182,255,.12), rgba(36,226,170,.08));
+  box-shadow: 0 0 34px rgba(93,182,255,.09);
+}
