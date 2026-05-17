@@ -2011,9 +2011,42 @@ function isAgvAsset(asset) {
   return text.includes('agv') || text.includes('automated guided') || text.includes('vehicle')
 }
 
+function assetWorkflow(asset = {}) {
+  const type = String(asset.type || asset.workflow || asset.equipment_type || '').toLowerCase()
+  const model = String(asset.model || '').toLowerCase()
+  const name = String(asset.name || '').toLowerCase()
+  const locationText = String(asset.location || '').toLowerCase()
+  const explicit = type
+  const combined = `${type} ${model} ${name} ${locationText}`
+
+  // Priority order matters: an edited ID card/workflow must override generic 3D Printer matching.
+  if (explicit.includes('wash') || explicit.includes('cure')) return 'WASH_CURE'
+  if (explicit.includes('resin') || explicit.includes('sla') || explicit.includes('msla')) return 'RESIN_PRINTER'
+  if (explicit.includes('fdm') || explicit.includes('filament')) return 'FDM_PRINTER'
+  if (explicit.includes('agv') || explicit.includes('automated guided') || explicit.includes('vehicle')) return 'AGV'
+
+  if (combined.includes('wash') || combined.includes('cure station')) return 'WASH_CURE'
+  if (combined.includes('resin') || combined.includes('sla') || combined.includes('msla')) return 'RESIN_PRINTER'
+  if (combined.includes('agv') || combined.includes('automated guided') || combined.includes('vehicle')) return 'AGV'
+  if (combined.includes('fdm') || combined.includes('filament') || combined.includes('printer') || combined.includes('3d print')) return 'FDM_PRINTER'
+  return 'GENERAL'
+}
+
 function isPrinterAsset(asset) {
-  const text = `${asset.name || ''} ${asset.type || ''} ${asset.location || ''}`.toLowerCase()
-  return text.includes('printer') || text.includes('3d print') || text.includes('resin') || text.includes('wash station')
+  const workflow = assetWorkflow(asset || {})
+  return workflow === 'FDM_PRINTER' || workflow === 'RESIN_PRINTER'
+}
+
+function isResinPrinterAsset(asset) {
+  return assetWorkflow(asset || {}) === 'RESIN_PRINTER'
+}
+
+function isFdmPrinterAsset(asset) {
+  return assetWorkflow(asset || {}) === 'FDM_PRINTER'
+}
+
+function isWashCureAsset(asset) {
+  return assetWorkflow(asset || {}) === 'WASH_CURE'
 }
 
 function fleetDowntime(fleetAssets) {
@@ -2125,20 +2158,28 @@ function fleetHealthSummary() {
 
 function serviceFormMarkup(assetId) {
   const asset = assets.find(a => a.id === assetId)
-  const isAgv = isAgvAsset(asset || {})
-  const isPrinter = isPrinterAsset(asset || {})
+  const workflow = assetWorkflow(asset || {})
+  const isAgv = workflow === 'AGV'
+  const isFdm = workflow === 'FDM_PRINTER'
+  const isResin = workflow === 'RESIN_PRINTER'
+  const isWashCure = workflow === 'WASH_CURE'
   const today = new Date().toISOString().slice(0, 10)
   const next = new Date(); next.setDate(next.getDate() + 90)
-  const workflowTitle = isAgv ? 'AGV Service Workflow' : isPrinter ? '3D Printer Service Workflow' : 'General Service Workflow'
-  const workflowText = isAgv ? 'Mobility, battery and safety inspection.' : isPrinter ? 'Print quality, motion system and reliability inspection.' : 'General engineering inspection.'
-  const specificFields = isAgv ? agvServiceFieldsMarkup() : isPrinter ? printerServiceFieldsMarkup() : generalServiceFieldsMarkup()
+  const workflowMeta = {
+    AGV: { title: 'AGV Service Workflow', text: 'Mobility, battery and safety inspection.', eyebrow: 'AUTONOMOUS VEHICLE SERVICE', tone: 'agv', fields: agvServiceFieldsMarkup() },
+    FDM_PRINTER: { title: 'FDM 3D Printer Service Workflow', text: 'Print quality, motion system and extrusion reliability inspection.', eyebrow: 'FDM ADDITIVE SERVICE', tone: 'printer', fields: printerServiceFieldsMarkup() },
+    RESIN_PRINTER: { title: 'Resin 3D Printer Service Workflow', text: 'Vat, FEP, LCD, UV and resin contamination inspection.', eyebrow: 'RESIN ADDITIVE SERVICE', tone: 'printer', fields: resinPrinterServiceFieldsMarkup() },
+    WASH_CURE: { title: 'Wash & Cure Station Service Workflow', text: 'Wash tank, UV cure, turntable and safety inspection.', eyebrow: 'POST-PROCESSING SERVICE', tone: 'printer', fields: washCureServiceFieldsMarkup() },
+    GENERAL: { title: 'General Service Workflow', text: 'General engineering inspection.', eyebrow: 'GENERAL SERVICE', tone: 'general', fields: generalServiceFieldsMarkup() }
+  }
+  const meta = workflowMeta[workflow] || workflowMeta.GENERAL
 
   return `
-    <div class="service-workflow-banner ${isAgv ? 'agv' : isPrinter ? 'printer' : 'general'}">
+    <div class="service-workflow-banner ${meta.tone}">
       <div>
-        <p class="eyebrow">${isAgv ? 'AUTONOMOUS VEHICLE SERVICE' : isPrinter ? 'ADDITIVE MANUFACTURING SERVICE' : 'GENERAL SERVICE'}</p>
-        <h3>${workflowTitle}</h3>
-        <p class="muted">${workflowText}</p>
+        <p class="eyebrow">${meta.eyebrow}</p>
+        <h3>${meta.title}</h3>
+        <p class="muted">${meta.text}</p>
       </div>
     </div>
     <div class="service-form-stack">
@@ -2174,7 +2215,7 @@ function serviceFormMarkup(assetId) {
         </label>
       </div>
       <div class="service-specific-grid">
-        ${specificFields}
+        ${meta.fields}
       </div>
       ${partsSelectorMarkup('service')}
       <label class="field-block wide">Issues found
@@ -2270,6 +2311,36 @@ function printerServiceFieldsMarkup() {
   `
 }
 
+function resinPrinterServiceFieldsMarkup() {
+  return `
+    ${checkField('resinVatCondition', 'Resin vat condition', ['Good', 'Cleaned', 'Contaminated', 'Replace'])}
+    ${checkField('resinFepFilm', 'FEP film condition', ['Good', 'Cloudy', 'Damaged', 'Replace'])}
+    ${checkField('resinLcdScreen', 'LCD screen inspection', ['Good', 'Marks visible', 'Pixels failed', 'Replace'])}
+    ${checkField('resinUvLight', 'UV light inspection', ['Good', 'Monitor', 'Weak', 'Failed'])}
+    ${checkField('resinBuildPlateCondition', 'Build plate condition', ['Good', 'Cleaned', 'Worn', 'Damaged'])}
+    ${checkField('resinBuildPlateLevelling', 'Build plate levelling', ['Pass', 'Adjusted', 'Fail', 'N/A'])}
+    ${checkField('resinContamination', 'Resin contamination check', ['Pass', 'Filtered', 'Contaminated', 'N/A'])}
+    ${checkField('resinZAxis', 'Z-axis inspection')}
+    ${checkField('resinRailLubrication', 'Rail lubrication check', ['Good', 'Lubricated', 'Dry', 'Requires attention'])}
+    ${checkField('resinExposureTest', 'Exposure test result', ['Passed', 'Minor defects', 'Failed', 'Not run'])}
+  `
+}
+
+function washCureServiceFieldsMarkup() {
+  return `
+    ${checkField('washTankCondition', 'Wash tank condition', ['Good', 'Cleaned', 'Contaminated', 'Damaged'])}
+    ${checkField('washImpeller', 'Wash impeller inspection', ['Good', 'Cleaned', 'Worn', 'Failed'])}
+    ${checkField('washMotorOperation', 'Wash motor operation check')}
+    ${checkField('washUvLight', 'UV light inspection', ['Good', 'Monitor', 'Weak', 'Failed'])}
+    ${checkField('washTurntable', 'Turntable rotation check')}
+    ${checkField('washLidSafety', 'Lid / safety switch inspection')}
+    ${checkField('washSealLeak', 'Seal / leak inspection', ['Pass', 'Monitor', 'Leak detected', 'N/A'])}
+    ${checkField('washElectrical', 'Electrical inspection')}
+    ${checkField('washCleaningCompleted', 'Cleaning completed', ['Pass', 'Partial', 'Failed', 'N/A'])}
+    ${checkField('washCureTest', 'Exposure / cure test result', ['Passed', 'Minor issue', 'Failed', 'Not run'])}
+  `
+}
+
 function generalServiceFieldsMarkup() {
   return `
     ${checkField('generalInspection', 'General inspection')}
@@ -2279,9 +2350,8 @@ function generalServiceFieldsMarkup() {
 }
 
 function collectServiceData(asset) {
-  const isAgv = isAgvAsset(asset || {})
-  const isPrinter = isPrinterAsset(asset || {})
-  if (isAgv) return {
+  const workflow = assetWorkflow(asset || {})
+  if (workflow === 'AGV') return {
     batteryType: value('#agvBatteryType'),
     batteryHealth: value('#agvBatteryHealth'),
     driveMotorsInspection: value('#agvDriveMotors'),
@@ -2294,7 +2364,31 @@ function collectServiceData(asset) {
     wiringCheck: value('#agvWiring'),
     upgradesRequired: value('#agvUpgradesRequired')
   }
-  if (isPrinter) return {
+  if (workflow === 'RESIN_PRINTER') return {
+    resinVatCondition: value('#resinVatCondition'),
+    fepFilmCondition: value('#resinFepFilm'),
+    lcdScreenInspection: value('#resinLcdScreen'),
+    uvLightInspection: value('#resinUvLight'),
+    buildPlateCondition: value('#resinBuildPlateCondition'),
+    buildPlateLevelling: value('#resinBuildPlateLevelling'),
+    resinContaminationCheck: value('#resinContamination'),
+    zAxisInspection: value('#resinZAxis'),
+    railLubricationCheck: value('#resinRailLubrication'),
+    exposureTestResult: value('#resinExposureTest')
+  }
+  if (workflow === 'WASH_CURE') return {
+    washTankCondition: value('#washTankCondition'),
+    washImpellerInspection: value('#washImpeller'),
+    washMotorOperationCheck: value('#washMotorOperation'),
+    uvLightInspection: value('#washUvLight'),
+    turntableRotationCheck: value('#washTurntable'),
+    lidSafetySwitchInspection: value('#washLidSafety'),
+    sealLeakInspection: value('#washSealLeak'),
+    electricalInspection: value('#washElectrical'),
+    cleaningCompleted: value('#washCleaningCompleted'),
+    exposureCureTestResult: value('#washCureTest')
+  }
+  if (workflow === 'FDM_PRINTER') return {
     nozzleCondition: value('#printerNozzle'),
     extruderGearCondition: value('#printerExtruderGear'),
     bedLevellingCheck: value('#printerBedLevelling'),
@@ -2315,8 +2409,11 @@ function collectServiceData(asset) {
 }
 
 function serviceCategory(asset) {
-  if (isAgvAsset(asset || {})) return 'AGV'
-  if (isPrinterAsset(asset || {})) return '3D_PRINTER'
+  const workflow = assetWorkflow(asset || {})
+  if (workflow === 'AGV') return 'AGV'
+  if (workflow === 'FDM_PRINTER') return 'FDM_3D_PRINTER'
+  if (workflow === 'RESIN_PRINTER') return 'RESIN_3D_PRINTER'
+  if (workflow === 'WASH_CURE') return 'WASH_CURE_STATION'
   return 'GENERAL'
 }
 
