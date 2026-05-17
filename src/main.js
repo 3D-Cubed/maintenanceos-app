@@ -372,7 +372,7 @@ function addAssetModal() {
           <div id="messageBox" class="message hidden"></div>
           <div class="form-grid">
             <input id="assetName" placeholder="Asset name" />
-            <input id="assetType" placeholder="Type e.g. 3D Printer" />
+            <select id="assetType">${assetTypeOptions('3D Printer')}</select>
             <input id="assetSerial" placeholder="Serial number" />
             <input id="assetLocation" placeholder="Location" />
             <input id="assetManufacturer" placeholder="Manufacturer" />
@@ -403,6 +403,110 @@ function closeAddAssetModal() {
 }
 
 window.closeAddAssetModal = closeAddAssetModal
+
+
+function assetTypeOptions(selected = '') {
+  const options = ['AGV', 'FDM 3D Printer', 'Resin 3D Printer', 'Wash & Cure Station', '3D Printer', 'General Equipment']
+  const current = selected && !options.includes(selected) ? [selected, ...options] : options
+  return current.map(o => `<option value="${escapeHtml(o)}" ${o === selected ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('')
+}
+
+function editAssetModal(asset) {
+  const safe = (v) => escapeHtml(v || '')
+  return `
+    <div id="editAssetModal" class="asset-modal hidden" role="dialog" aria-modal="true">
+      <div class="asset-modal-backdrop" onclick="window.closeAssetModal('editAssetModal')"></div>
+      <div class="asset-modal-card repair-modal-card">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">ASSET ID CARD</p>
+            <h2>Edit Asset Details</h2>
+            <p class="muted">Correct asset identity, model, status and service routing details.</p>
+          </div>
+          <button class="icon-btn" type="button" onclick="window.closeAssetModal('editAssetModal')">×</button>
+        </div>
+        <div class="asset-modal-scroll">
+          <div id="editAssetMessageBox" class="message hidden"></div>
+          <div class="form-grid">
+            <label class="field-block">Asset name
+              <input id="editAssetName" value="${safe(asset.name)}" placeholder="Asset name" />
+            </label>
+            <label class="field-block">Equipment type / workflow
+              <select id="editAssetType">${assetTypeOptions(asset.type || '')}</select>
+            </label>
+            <label class="field-block">Serial number
+              <input id="editAssetSerial" value="${safe(asset.serial_number)}" placeholder="Serial number" />
+            </label>
+            <label class="field-block">Location
+              <input id="editAssetLocation" value="${safe(asset.location)}" placeholder="Location" />
+            </label>
+            <label class="field-block">Manufacturer
+              <input id="editAssetManufacturer" value="${safe(asset.manufacturer)}" placeholder="Manufacturer" />
+            </label>
+            <label class="field-block">Model / version
+              <input id="editAssetModel" value="${safe(asset.model)}" placeholder="e.g. A1, X1C, Metal Craft, Resin V2" />
+            </label>
+            <label class="field-block">Status
+              <select id="editAssetStatus">${statusOptions.map(o => `<option ${o === (asset.status || 'Operational') ? 'selected' : ''}>${o}</option>`).join('')}</select>
+            </label>
+            <label class="field-block">Next service due
+              <input id="editAssetService" type="date" value="${safe(asset.next_service_date)}" />
+            </label>
+          </div>
+          <label class="field-block wide">Notes / ID card comments
+            <textarea id="editAssetNotes" placeholder="Notes, configuration details, service comments...">${safe(asset.notes)}</textarea>
+          </label>
+          <div class="id-card-help">
+            <strong>Workflow routing tip:</strong>
+            <span>Set FDM printers as <b>FDM 3D Printer</b>, resin machines as <b>Resin 3D Printer</b>, and wash stations as <b>Wash & Cure Station</b> so the correct service form opens.</span>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" onclick="window.closeAssetModal('editAssetModal')">Cancel</button>
+          <button id="saveAssetEdit" class="primary" type="button">Save Asset ID Card</button>
+        </div>
+      </div>
+    </div>
+  `
+}
+
+async function updateAssetIdCard(assetId) {
+  const name = value('#editAssetName')
+  if (!name) return showEditAssetMessage('Asset name is required.', 'error')
+
+  const payload = {
+    name,
+    type: value('#editAssetType'),
+    serial_number: value('#editAssetSerial'),
+    location: value('#editAssetLocation'),
+    manufacturer: value('#editAssetManufacturer'),
+    model: value('#editAssetModel'),
+    status: value('#editAssetStatus') || 'Operational',
+    next_service_date: value('#editAssetService') || null,
+    notes: value('#editAssetNotes')
+  }
+
+  const btn = document.querySelector('#saveAssetEdit')
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...' }
+  const { error } = await supabase.from('assets').update(payload).eq('id', assetId)
+  if (btn) { btn.disabled = false; btn.textContent = 'Save Asset ID Card' }
+  if (error) return showEditAssetMessage(error.message, 'error')
+
+  await audit('asset_updated', 'assets', name)
+  toast('Asset ID card updated.', 'success')
+  await loadData()
+  closeAssetModal('editAssetModal')
+  renderAssetDetail(assetId)
+}
+
+function showEditAssetMessage(message, type = 'info') {
+  const box = document.querySelector('#editAssetMessageBox')
+  if (!box) return toast(message, type)
+  box.textContent = message
+  box.className = `message ${type}`
+}
+
+window.updateAssetIdCard = updateAssetIdCard
 
 function renderAssets() {
   content().innerHTML = `
@@ -630,7 +734,7 @@ async function renderAssetDetail(id) {
   const qr = await QRCode.toDataURL(qrUrl)
 
   content().innerHTML = `
-    ${renderHeader('ASSET RECORD', escapeHtml(a.name), `<button onclick="location.hash='assets'">Back</button><button class="danger subtle" onclick="window.archiveAsset('${a.id}', '${escapeHtml(a.name || 'this asset')}')">Archive Asset</button>`)}
+    ${renderHeader('ASSET RECORD', escapeHtml(a.name), `<button onclick="location.hash='assets'">Back</button><button onclick="window.openAssetModal('editAssetModal')">Edit Asset</button><button class="danger subtle" onclick="window.archiveAsset('${a.id}', '${escapeHtml(a.name || 'this asset')}')">Archive Asset</button>`)}
     <section class="grid three asset-specific-grid">
       <div class="card intelligence-card">
         <h2>Open Repairs</h2>
@@ -669,7 +773,7 @@ async function renderAssetDetail(id) {
       </div>
       <div class="card">
         <h2>Equipment Details</h2>
-        <p><b>Type:</b> ${escapeHtml(a.type || '-')}</p>
+        <p><b>Type / workflow:</b> ${escapeHtml(a.type || '-')}</p>
         <p><b>Location:</b> ${escapeHtml(a.location || '-')}</p>
         <p><b>Status:</b> ${escapeHtml(a.status || '-')}</p>
         <p><b>Serial:</b> ${escapeHtml(a.serial_number || '-')}</p>
@@ -677,6 +781,7 @@ async function renderAssetDetail(id) {
         <p><b>Model:</b> ${escapeHtml(a.model || '-')}</p>
         <p><b>Next service:</b> ${escapeHtml(a.next_service_date || '-')}</p>
         <p>${escapeHtml(a.notes || '')}</p>
+        <button onclick="window.openAssetModal('editAssetModal')">Edit ID Card</button>
       </div>
       <div class="card qr-mini">
         <h2>QR Link</h2>
@@ -699,6 +804,7 @@ async function renderAssetDetail(id) {
       <h2>Asset History Timeline</h2>
       ${assetHistoryTimeline(a, assetRepairs, assetServices)}
     </section>
+    ${editAssetModal(a)}
     <div id="serviceModal" class="asset-modal hidden">
       <div class="asset-modal-backdrop" onclick="window.closeAssetModal('serviceModal')"></div>
       <div class="asset-modal-card service-modal-card">
@@ -750,6 +856,7 @@ async function renderAssetDetail(id) {
   `
 
   document.querySelector('#saveRepair').onclick = () => addRepair(a.id)
+  document.querySelector('#saveAssetEdit')?.addEventListener('click', () => updateAssetIdCard(a.id))
   document.querySelector('#saveService')?.addEventListener('click', () => saveServiceRecord(a.id))
   initialiseServiceConditionalNotes()
 }
@@ -1904,27 +2011,9 @@ function isAgvAsset(asset) {
   return text.includes('agv') || text.includes('automated guided') || text.includes('vehicle')
 }
 
-function assetSearchText(asset = {}) {
-  return `${asset.name || ''} ${asset.type || ''} ${asset.model || ''} ${asset.location || ''}`.toLowerCase()
-}
-
-function isWashCureAsset(asset = {}) {
-  const text = assetSearchText(asset)
-  return text.includes('wash') || text.includes('cure') || text.includes('curing') || text.includes('ipa')
-}
-
-function isResinPrinterAsset(asset = {}) {
-  const text = assetSearchText(asset)
-  return !isWashCureAsset(asset) && (text.includes('resin') || text.includes('sla') || text.includes('lcd') || text.includes('msla'))
-}
-
 function isPrinterAsset(asset) {
-  const text = assetSearchText(asset)
-  return !isWashCureAsset(asset) && (text.includes('printer') || text.includes('3d print') || isResinPrinterAsset(asset))
-}
-
-function isFdmPrinterAsset(asset = {}) {
-  return isPrinterAsset(asset) && !isResinPrinterAsset(asset)
+  const text = `${asset.name || ''} ${asset.type || ''} ${asset.location || ''}`.toLowerCase()
+  return text.includes('printer') || text.includes('3d print') || text.includes('resin') || text.includes('wash station')
 }
 
 function fleetDowntime(fleetAssets) {
@@ -2037,20 +2126,19 @@ function fleetHealthSummary() {
 function serviceFormMarkup(assetId) {
   const asset = assets.find(a => a.id === assetId)
   const isAgv = isAgvAsset(asset || {})
-  const isWash = isWashCureAsset(asset || {})
-  const isResin = isResinPrinterAsset(asset || {})
-  const isFdm = isFdmPrinterAsset(asset || {})
+  const isPrinter = isPrinterAsset(asset || {})
   const today = new Date().toISOString().slice(0, 10)
   const next = new Date(); next.setDate(next.getDate() + 90)
-  const workflow = serviceWorkflowForAsset(asset || {})
-  const specificFields = workflow.markup()
+  const workflowTitle = isAgv ? 'AGV Service Workflow' : isPrinter ? '3D Printer Service Workflow' : 'General Service Workflow'
+  const workflowText = isAgv ? 'Mobility, battery and safety inspection.' : isPrinter ? 'Print quality, motion system and reliability inspection.' : 'General engineering inspection.'
+  const specificFields = isAgv ? agvServiceFieldsMarkup() : isPrinter ? printerServiceFieldsMarkup() : generalServiceFieldsMarkup()
 
   return `
-    <div class="service-workflow-banner ${workflow.className}">
+    <div class="service-workflow-banner ${isAgv ? 'agv' : isPrinter ? 'printer' : 'general'}">
       <div>
-        <p class="eyebrow">${workflow.eyebrow}</p>
-        <h3>${workflow.title}</h3>
-        <p class="muted">${workflow.description}</p>
+        <p class="eyebrow">${isAgv ? 'AUTONOMOUS VEHICLE SERVICE' : isPrinter ? 'ADDITIVE MANUFACTURING SERVICE' : 'GENERAL SERVICE'}</p>
+        <h3>${workflowTitle}</h3>
+        <p class="muted">${workflowText}</p>
       </div>
     </div>
     <div class="service-form-stack">
@@ -2104,44 +2192,6 @@ function serviceFormMarkup(assetId) {
       </div>
     </div>
   `
-}
-
-function serviceWorkflowForAsset(asset = {}) {
-  if (isAgvAsset(asset)) return {
-    className: 'agv',
-    eyebrow: 'AUTONOMOUS VEHICLE SERVICE',
-    title: 'AGV Service Workflow',
-    description: 'Mobility, battery and safety inspection.',
-    markup: agvServiceFieldsMarkup
-  }
-  if (isWashCureAsset(asset)) return {
-    className: 'wash-cure',
-    eyebrow: 'RESIN POST-PROCESSING SERVICE',
-    title: 'Wash & Cure Station Service Workflow',
-    description: 'Chemical contamination, washing, UV curing and safety checks.',
-    markup: washCureServiceFieldsMarkup
-  }
-  if (isResinPrinterAsset(asset)) return {
-    className: 'resin-printer',
-    eyebrow: 'RESIN PRINTER SERVICE',
-    title: 'Resin Printer Service Workflow',
-    description: 'Vat, FEP, LCD, UV exposure and contamination inspection.',
-    markup: resinPrinterServiceFieldsMarkup
-  }
-  if (isPrinterAsset(asset)) return {
-    className: 'printer',
-    eyebrow: 'FDM ADDITIVE MANUFACTURING SERVICE',
-    title: 'FDM Printer Service Workflow',
-    description: 'Print quality, extrusion, motion system and reliability inspection.',
-    markup: printerServiceFieldsMarkup
-  }
-  return {
-    className: 'general',
-    eyebrow: 'GENERAL SERVICE',
-    title: 'General Service Workflow',
-    description: 'General engineering inspection.',
-    markup: generalServiceFieldsMarkup
-  }
 }
 
 function checkField(id, label, options = ['Pass', 'Monitor', 'Fail', 'N/A']) {
@@ -2220,38 +2270,6 @@ function printerServiceFieldsMarkup() {
   `
 }
 
-function resinPrinterServiceFieldsMarkup() {
-  return `
-    ${checkField('resinVatCondition', 'Resin vat condition', ['Good', 'Cleaned', 'Cloudy', 'Damaged', 'Replace'])}
-    ${checkField('resinFepFilmCondition', 'FEP film condition', ['Good', 'Cloudy', 'Marked', 'Punctured', 'Replace'])}
-    ${checkField('resinLcdInspection', 'LCD screen inspection', ['Pass', 'Monitor', 'Damaged', 'Replace'])}
-    ${checkField('resinUvLightInspection', 'UV light inspection', ['Pass', 'Monitor', 'Fail', 'N/A'])}
-    ${checkField('resinBuildPlateCondition', 'Build plate condition', ['Good', 'Cleaned', 'Worn', 'Damaged'])}
-    ${checkField('resinBuildPlateLevelling', 'Build plate levelling', ['Pass', 'Adjusted', 'Fail', 'N/A'])}
-    ${checkField('resinContaminationCheck', 'Resin contamination check', ['Pass', 'Contamination found', 'Filter required', 'N/A'])}
-    ${checkField('resinZAxisInspection', 'Z-axis inspection')}
-    ${checkField('resinRailLubrication', 'Rail lubrication check', ['Good', 'Lubricated', 'Dry', 'Requires attention'])}
-    ${checkField('resinExposureTest', 'Exposure test result', ['Passed', 'Minor issue', 'Failed', 'Not run'])}
-  `
-}
-
-function washCureServiceFieldsMarkup() {
-  return `
-    ${checkField('washIpaContamination', 'IPA / resin contamination check', ['Pass', 'Contaminated', 'Needs replacement', 'N/A'])}
-    ${checkField('washImpellerInspection', 'Wash impeller inspection')}
-    ${checkField('washMotorOperation', 'Wash motor operation check')}
-    ${checkField('washUvLightInspection', 'UV light inspection')}
-    ${checkField('washTurntableRotation', 'Turntable rotation check')}
-    ${checkField('washLidSafetySwitch', 'Lid / safety switch inspection')}
-    ${checkField('washTankCondition', 'Tank condition', ['Good', 'Stained', 'Cracked', 'Replace'])}
-    ${checkField('washSealLeakInspection', 'Seal / leak inspection')}
-    ${checkField('washCoolingFan', 'Fan / cooling inspection')}
-    ${checkField('washElectricalInspection', 'Electrical inspection')}
-    ${checkField('washCleaningCompleted', 'Cleaning completed', ['Completed', 'Partial', 'Not completed', 'N/A'])}
-    ${checkField('washCureTestResult', 'Exposure / cure test result', ['Passed', 'Minor issue', 'Failed', 'Not run'])}
-  `
-}
-
 function generalServiceFieldsMarkup() {
   return `
     ${checkField('generalInspection', 'General inspection')}
@@ -2261,7 +2279,9 @@ function generalServiceFieldsMarkup() {
 }
 
 function collectServiceData(asset) {
-  if (isAgvAsset(asset || {})) return {
+  const isAgv = isAgvAsset(asset || {})
+  const isPrinter = isPrinterAsset(asset || {})
+  if (isAgv) return {
     batteryType: value('#agvBatteryType'),
     batteryHealth: value('#agvBatteryHealth'),
     driveMotorsInspection: value('#agvDriveMotors'),
@@ -2274,33 +2294,7 @@ function collectServiceData(asset) {
     wiringCheck: value('#agvWiring'),
     upgradesRequired: value('#agvUpgradesRequired')
   }
-  if (isWashCureAsset(asset || {})) return {
-    ipaResinContaminationCheck: value('#washIpaContamination'),
-    washImpellerInspection: value('#washImpellerInspection'),
-    washMotorOperationCheck: value('#washMotorOperation'),
-    uvLightInspection: value('#washUvLightInspection'),
-    turntableRotationCheck: value('#washTurntableRotation'),
-    lidSafetySwitchInspection: value('#washLidSafetySwitch'),
-    tankCondition: value('#washTankCondition'),
-    sealLeakInspection: value('#washSealLeakInspection'),
-    fanCoolingInspection: value('#washCoolingFan'),
-    electricalInspection: value('#washElectricalInspection'),
-    cleaningCompleted: value('#washCleaningCompleted'),
-    exposureCureTestResult: value('#washCureTestResult')
-  }
-  if (isResinPrinterAsset(asset || {})) return {
-    resinVatCondition: value('#resinVatCondition'),
-    fepFilmCondition: value('#resinFepFilmCondition'),
-    lcdScreenInspection: value('#resinLcdInspection'),
-    uvLightInspection: value('#resinUvLightInspection'),
-    buildPlateCondition: value('#resinBuildPlateCondition'),
-    buildPlateLevelling: value('#resinBuildPlateLevelling'),
-    resinContaminationCheck: value('#resinContaminationCheck'),
-    zAxisInspection: value('#resinZAxisInspection'),
-    railLubricationCheck: value('#resinRailLubrication'),
-    exposureTestResult: value('#resinExposureTest')
-  }
-  if (isPrinterAsset(asset || {})) return {
+  if (isPrinter) return {
     nozzleCondition: value('#printerNozzle'),
     extruderGearCondition: value('#printerExtruderGear'),
     bedLevellingCheck: value('#printerBedLevelling'),
@@ -2322,9 +2316,7 @@ function collectServiceData(asset) {
 
 function serviceCategory(asset) {
   if (isAgvAsset(asset || {})) return 'AGV'
-  if (isWashCureAsset(asset || {})) return 'WASH_CURE'
-  if (isResinPrinterAsset(asset || {})) return 'RESIN_PRINTER'
-  if (isPrinterAsset(asset || {})) return 'FDM_PRINTER'
+  if (isPrinterAsset(asset || {})) return '3D_PRINTER'
   return 'GENERAL'
 }
 

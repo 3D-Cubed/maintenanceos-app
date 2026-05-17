@@ -1425,14 +1425,19 @@ body.modal-open { overflow: hidden; }
   .part-detail-layout, .mini-grid { grid-template-columns: 1fr; }
 }
 
-/* V18E Resin / Wash & Cure workflow accents */
-.service-workflow-banner.resin-printer {
-  border-color: rgba(156,132,255,.36);
-  background: linear-gradient(135deg, rgba(156,132,255,.13), rgba(93,182,255,.08));
-  box-shadow: 0 0 34px rgba(156,132,255,.09);
+/* V18F Editable Asset ID Card */
+.id-card-help {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(93, 255, 213, .18);
+  background: linear-gradient(135deg, rgba(34, 238, 190, .10), rgba(91, 181, 255, .06));
+  color: #baf8ef;
+  display: grid;
+  gap: 5px;
 }
-.service-workflow-banner.wash-cure {
-  border-color: rgba(93,182,255,.36);
-  background: linear-gradient(135deg, rgba(93,182,255,.12), rgba(36,226,170,.08));
-  box-shadow: 0 0 34px rgba(93,182,255,.09);
+.id-card-help strong { color: #effffb; }
+.id-card-help span { color: #a7deda; line-height: 1.45; }
+.equipment-details-actions {
+  margin-top: 18px;
 }
