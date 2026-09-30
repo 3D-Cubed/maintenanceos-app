@@ -16,3 +16,6 @@ The uploaded ZIP was used as the sole source baseline.
 - Fixed entry wordmark clipping.
 - Improved QR/action and fault-form spacing.
 - Preserved V19 fault-first workflow and database compatibility.
+
+## 1.21.0
+- Added fault reporter traceability and inventory-backed repair parts workflow.

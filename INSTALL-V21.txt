@@ -1,0 +1,12 @@
+MaintenanceOS V21 installation
+
+1. In Supabase -> SQL Editor, run DB-V21-REPAIR-PARTS-REPORTER.sql once. This is additive and preserves existing records.
+2. Copy the V21 release files over your cloned maintenanceos-app Git repository (do not delete the .git folder).
+3. In CMD from that repository run: npm install
+4. Run: npm run build
+5. Run: git status
+6. Run: git add .
+7. Run: git commit -m "MaintenanceOS V21 repair parts integration"
+8. Run: git push origin main
+9. Vercel will deploy automatically from GitHub.
+10. Hard refresh the live app with Ctrl+Shift+R and test: Report Fault reporter name; Record Repair inventory selection; + New Part; stock deduction; Parts page.

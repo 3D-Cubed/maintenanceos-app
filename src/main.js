@@ -8,6 +8,8 @@ let session = null
 let assets = []
 let repairs = []
 let maintenance = []
+let partsInventory = []
+let selectedRepairParts = []
 let activePage = 'dashboard'
 let resolveContext = null
 let resolvingTicket = false
@@ -157,24 +159,28 @@ function renderAuth() {
 
 async function loadData() {
   try {
-    const [assetResult, repairResult, maintenanceResult] = await Promise.all([
+    const [assetResult, repairResult, maintenanceResult, partsResult] = await Promise.all([
       supabase.from('assets').select('*').or('archived.is.null,archived.eq.false').order('created_at', { ascending: false }),
       supabase.from('repair_tickets').select('*').order('created_at', { ascending: false }),
-      supabase.from('maintenance_tasks').select('*').order('due_date', { ascending: true })
+      supabase.from('maintenance_tasks').select('*').order('due_date', { ascending: true }),
+      supabase.from('parts_inventory').select('*').order('name', { ascending: true })
     ])
 
     if (assetResult.error) console.warn(assetResult.error.message)
     if (repairResult.error) console.warn(repairResult.error.message)
     if (maintenanceResult.error && !maintenanceResult.error.message.includes('maintenance_tasks')) console.warn(maintenanceResult.error.message)
+    if (partsResult.error) console.warn(partsResult.error.message)
 
     assets = assetResult.data || []
     repairs = repairResult.data || []
     maintenance = maintenanceResult.data || []
+    partsInventory = partsResult.data || []
   } catch (err) {
     console.warn('Data load skipped:', err?.message || err)
     assets = []
     repairs = []
     maintenance = []
+    partsInventory = []
   }
 }
 
@@ -208,6 +214,7 @@ function renderShell(withSidebar = true) {
         ${navButton('assets', 'Assets')}
         ${navButton('repairs', 'Faults & Repairs')}
         ${navButton('maintenance', 'Maintenance')}
+        ${navButton('parts', 'Parts')}
         ${navButton('qr', 'QR Labels')}
         ${navButton('reports', 'Reports')}
         <button id="logout" class="nav danger">Exit</button>
@@ -241,6 +248,7 @@ function renderPage() {
   if (activePage === 'assets') return renderAssets()
   if (activePage === 'repairs') return renderRepairs()
   if (activePage === 'maintenance') return renderMaintenance()
+  if (activePage === 'parts') return renderParts()
   if (activePage === 'qr') return renderQR()
   if (activePage === 'reports') return renderReports()
   renderDashboard()
@@ -418,6 +426,7 @@ async function renderAssetDetail(id) {
       <h2>Report Fault</h2>
       <p class="muted">QR workflow: scan, describe fault, attach photo, submit.</p>
       <div id="messageBox" class="message hidden"></div>
+      <input id="repairReporter" placeholder="Your name" autocomplete="name" />
       <input id="repairTitle" placeholder="Fault title" />
       <textarea id="repairDesc" placeholder="Fault description"></textarea>
       <div class="form-grid">
@@ -483,7 +492,8 @@ function openResolveModal(repairId, assetId) {
   document.querySelector('#resolveAssetName').textContent = asset?.name || 'Unknown asset'
   document.querySelector('#resolveMeta').textContent = `Fault ${repair.id} • ${repair.priority || 'Medium'} priority • ${repair.status}`
   document.querySelector('#resolutionNotes').value = repair?.resolution_notes || ''
-  document.querySelector('#resolutionParts').value = repair?.parts_used || ''
+  selectedRepairParts = []
+  renderRepairPartPicker()
   document.querySelector('#resolutionCost').value = repair?.cost || ''
   document.querySelector('#resolutionDowntime').value = repair?.downtime_hours || ''
   document.querySelector('#resolveSuccess').classList.add('hidden')
@@ -511,7 +521,7 @@ async function confirmResolveRepair() {
   const context = { ...resolveContext }
   const confirmBtn = document.querySelector('#confirmResolve')
   const notes = value('#resolutionNotes')
-  const parts = value('#resolutionParts')
+  const parts = selectedRepairParts.map(item => ({ part_id: item.id, quantity: item.quantity }))
   const costValue = value('#resolutionCost')
   const downtimeValue = value('#resolutionDowntime')
   if (!notes) return toast('Add repair and verification notes before resolving the fault.', 'error')
@@ -525,9 +535,9 @@ async function confirmResolveRepair() {
   confirmBtn.textContent = 'Saving repair…'
   let saved = false
   try {
-    const { error } = await supabase.rpc('complete_fault_repair', {
+    const { error } = await supabase.rpc('complete_fault_repair_v21', {
       p_fault_id: context.repairId, p_asset_id: context.assetId,
-      p_notes: notes, p_parts: parts || null, p_cost: cost, p_downtime: downtime
+      p_notes: notes, p_parts: parts, p_cost: cost, p_downtime: downtime
     })
     if (error) throw new Error(error.message)
     saved = true
@@ -580,9 +590,16 @@ function ensureResolveModal() {
         </label>
 
         <div class="form-grid resolve-grid">
-          <label class="field-label">Parts used
-            <input id="resolutionParts" placeholder="e.g. nozzle, belt, sensor" />
-          </label>
+          <div class="field-label repair-parts-field">
+            <span>Parts used</span>
+            <div class="part-picker-row">
+              <select id="resolutionPartSelect"></select>
+              <input id="resolutionPartQty" type="number" min="1" step="1" value="1" aria-label="Quantity" />
+              <button id="addSelectedPart" type="button" class="ghost">Add</button>
+              <button id="openNewPart" type="button" class="ghost">+ New Part</button>
+            </div>
+            <div id="selectedRepairParts" class="selected-parts"></div>
+          </div>
           <label class="field-label">Repair cost (£)
             <input id="resolutionCost" type="number" min="0" step="0.01" placeholder="0.00" />
           </label>
@@ -603,9 +620,76 @@ function ensureResolveModal() {
   document.querySelector('#cancelResolve').onclick = closeResolveModal
   document.querySelector('[data-close-resolve]').onclick = closeResolveModal
   document.querySelector('#confirmResolve').onclick = confirmResolveRepair
+  document.querySelector('#addSelectedPart').onclick = addSelectedRepairPart
+  document.querySelector('#openNewPart').onclick = () => openPartModal(true)
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape') closeResolveModal()
   })
+}
+
+
+function renderRepairPartPicker() {
+  const select = document.querySelector('#resolutionPartSelect')
+  if (!select) return
+  const available = partsInventory.filter(p => Number(p.quantity_in_stock || 0) > 0)
+  select.innerHTML = available.length
+    ? available.map(p => `<option value="${p.id}">${escapeHtml(p.name || p.part_number || 'Unnamed part')} • ${Number(p.quantity_in_stock || 0)} in stock</option>`).join('')
+    : '<option value="">No stocked parts available</option>'
+  const list = document.querySelector('#selectedRepairParts')
+  if (list) list.innerHTML = selectedRepairParts.length ? selectedRepairParts.map((p, i) => `
+    <div class="selected-part"><span><b>${escapeHtml(p.name || p.part_number || 'Part')}</b> × ${p.quantity}</span><button type="button" class="ghost compact" onclick="window.removeRepairPart(${i})">Remove</button></div>`).join('') : '<small class="muted">No parts selected.</small>'
+}
+
+function addSelectedRepairPart() {
+  const id = value('#resolutionPartSelect')
+  const qty = Number(value('#resolutionPartQty') || 1)
+  const part = partsInventory.find(p => p.id === id)
+  if (!part) return toast('Select an inventory part first.', 'error')
+  if (!Number.isInteger(qty) || qty < 1) return toast('Enter a valid whole-number quantity.', 'error')
+  const existing = selectedRepairParts.find(p => p.id === id)
+  const total = qty + (existing?.quantity || 0)
+  if (total > Number(part.quantity_in_stock || 0)) return toast(`Only ${part.quantity_in_stock || 0} in stock.`, 'error')
+  if (existing) existing.quantity = total
+  else selectedRepairParts.push({ ...part, quantity: qty })
+  renderRepairPartPicker()
+}
+window.removeRepairPart = index => { selectedRepairParts.splice(index, 1); renderRepairPartPicker() }
+
+function openPartModal(selectAfterSave = false) {
+  ensurePartModal()
+  const modal = document.querySelector('#partModal')
+  modal.dataset.selectAfterSave = selectAfterSave ? 'true' : 'false'
+  ;['partNumber','partName','partDescription','partCategory','partSupplier','partLocation'].forEach(id => { document.querySelector(`#${id}`).value = '' })
+  document.querySelector('#partUnitCost').value = '0'
+  document.querySelector('#partStock').value = '0'
+  document.querySelector('#partMinimum').value = '0'
+  modal.hidden = false; modal.classList.remove('hidden')
+  document.querySelector('#partName').focus()
+}
+function closePartModal() { const m=document.querySelector('#partModal'); if(m){m.hidden=true;m.classList.add('hidden')} }
+function ensurePartModal() {
+  if (document.querySelector('#partModal')) return
+  document.body.insertAdjacentHTML('beforeend', `<div id="partModal" class="resolve-modal hidden" hidden><div class="resolve-backdrop" data-close-part></div><section class="resolve-card" role="dialog" aria-modal="true"><div class="resolve-head"><div><p class="eyebrow">PARTS INVENTORY</p><h2>Add New Part</h2><p class="muted">Create the part once, then reuse it on future repairs.</p></div><button id="closePart" class="icon-btn">×</button></div><div class="form-grid"><label class="field-label">Part name<input id="partName" /></label><label class="field-label">Part number<input id="partNumber" /></label><label class="field-label">Category<input id="partCategory" /></label><label class="field-label">Supplier<input id="partSupplier" /></label><label class="field-label">Unit cost (£)<input id="partUnitCost" type="number" min="0" step="0.01" value="0" /></label><label class="field-label">Current stock<input id="partStock" type="number" min="0" step="1" value="0" /></label><label class="field-label">Minimum stock<input id="partMinimum" type="number" min="0" step="1" value="0" /></label><label class="field-label">Storage location<input id="partLocation" /></label></div><label class="field-label">Description<textarea id="partDescription"></textarea></label><div class="resolve-actions"><button id="cancelPart" class="ghost">Cancel</button><button id="savePart" class="primary">Add Part</button></div></section></div>`)
+  document.querySelector('#closePart').onclick=closePartModal; document.querySelector('#cancelPart').onclick=closePartModal; document.querySelector('[data-close-part]').onclick=closePartModal; document.querySelector('#savePart').onclick=saveNewPart
+}
+async function saveNewPart() {
+  const name=value('#partName'); if(!name) return toast('Part name is required.','error')
+  const stock=Number(value('#partStock')||0), minimum=Number(value('#partMinimum')||0), unitCost=Number(value('#partUnitCost')||0)
+  if (![stock,minimum].every(Number.isInteger) || stock<0 || minimum<0 || !Number.isFinite(unitCost) || unitCost<0) return toast('Stock values must be whole numbers and cost must be zero or positive.','error')
+  const selectAfter=document.querySelector('#partModal')?.dataset.selectAfterSave==='true'
+  // When created from a repair, the stock field means what remains after the fitted item.
+  // Add one temporarily so the atomic repair transaction can consume it and leave the entered remainder.
+  const payload={name,part_number:value('#partNumber')||null,description:value('#partDescription')||null,category:value('#partCategory')||null,supplier:value('#partSupplier')||null,unit_cost:unitCost,quantity_in_stock:stock + (selectAfter ? 1 : 0),minimum_stock:minimum,location:value('#partLocation')||null}
+  const {data,error}=await supabase.from('parts_inventory').insert(payload).select().single(); if(error) return toast(`Part was not added: ${error.message}`,'error')
+  partsInventory.push(data); partsInventory.sort((a,b)=>(a.name||'').localeCompare(b.name||''))
+  closePartModal()
+  if(selectAfter){ selectedRepairParts.push({...data,quantity:1}); renderRepairPartPicker(); toast('Part added to inventory and selected for this repair.','success') }
+  else { renderParts(); toast('Part added to inventory.','success') }
+}
+
+function renderParts() {
+  content().innerHTML = `${renderHeader('STOCK CONTROL','Parts', '<button class="primary" id="newInventoryPart">Add New Part</button>')}<section class="stats-grid">${statCard('Inventory Parts',partsInventory.length,'Reusable maintenance catalogue')}${statCard('Low Stock',partsInventory.filter(p=>Number(p.quantity_in_stock||0)<=Number(p.minimum_stock||0)).length,'At or below minimum')}</section><section class="card"><h2>Parts Inventory</h2><div class="parts-list">${partsInventory.map(p=>`<div class="data-row"><div><h3>${escapeHtml(p.name||'Unnamed part')}</h3><p>${escapeHtml(p.part_number||'No part number')} • ${escapeHtml(p.category||'Uncategorised')} • ${escapeHtml(p.location||'No location')}</p><small>${escapeHtml(p.supplier||'No supplier')} • £${Number(p.unit_cost||0).toFixed(2)} each</small></div><div class="stock-count ${Number(p.quantity_in_stock||0)<=Number(p.minimum_stock||0)?'low':''}"><b>${Number(p.quantity_in_stock||0)}</b><small>in stock</small></div></div>`).join('')||'<p class="muted">No parts in inventory yet.</p>'}</div></section>`
+  document.querySelector('#newInventoryPart').onclick=()=>openPartModal(false)
 }
 
 function toast(message, type = 'info') {
@@ -636,7 +720,9 @@ async function addRepair(assetId = null) {
   if (submittingFault) return
   const selectedAsset = assetId || value('#repairAsset')
   const title = value('#repairTitle')
+  const reportedBy = value('#repairReporter')
   if (!selectedAsset) return showMessage('Select an asset.', 'error')
+  if (!reportedBy) return showMessage('Your name is required so engineering can follow up on the fault.', 'error')
   if (!title) return showMessage('Fault title is required.', 'error')
   const button = document.querySelector(assetId ? '#saveRepair' : '#addRepair')
   submittingFault = true
@@ -644,7 +730,7 @@ async function addRepair(assetId = null) {
   let saved = false
   try {
     const payload = {
-      asset_id: selectedAsset, title, description: value('#repairDesc'),
+      asset_id: selectedAsset, title, description: value('#repairDesc'), reported_by: reportedBy,
       priority: value('#repairPriority') || 'Medium', status: 'Open',
       photo_url: await uploadRepairPhoto()
     }
@@ -684,6 +770,11 @@ function renderRepairs() {
         <div class="field-block wide">
           <label>Asset</label>
           <select id="repairAsset">${assets.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('')}</select>
+        </div>
+
+        <div class="field-block wide">
+          <label>Reported by</label>
+          <input id="repairReporter" placeholder="Name of person reporting the fault" autocomplete="name" />
         </div>
 
         <div class="field-block wide">
@@ -739,6 +830,7 @@ function repairRow(r) {
         </div>
         <p>${escapeHtml(asset?.name || 'Unknown Asset')} • ${escapeHtml(r.status || 'Open')}</p>
         <small>Fault reference: ${escapeHtml(r.id)}</small>
+        <small><b>Reported by:</b> ${escapeHtml(r.reported_by || 'Not recorded')}</small>
         <small>${escapeHtml(r.description || '')}</small>
         ${resolved ? `<small>Repair cost: £${Number(r.cost || 0).toFixed(2)} • Downtime: ${Number(r.downtime_hours || 0)}h • Parts: ${escapeHtml(r.parts_used || 'None recorded')}</small>` : ''}
         ${r.resolution_notes ? `<small><b>Resolution:</b> ${escapeHtml(r.resolution_notes)}</small>` : ''}
