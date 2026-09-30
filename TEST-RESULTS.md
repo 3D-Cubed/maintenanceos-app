@@ -40,3 +40,9 @@ was accessed. Multi-session concurrency was not load-tested. The initial reporte
 page lock could not be reproduced in this pack; submission/overlay lifecycle paths
 were hardened and the resulting scrolling and interaction behavior was verified.
 Complete the deployment smoke check in `README-FIRST.txt` against a test asset.
+
+## V20 UI Normalisation
+- `node --check src/main.js`: PASS
+- `npm run test:database`: PASS (fault-first migration/constraints/RPC/RLS)
+- Browser test: could not execute in this sandbox because localhost navigation is blocked by the environment administrator. Chromium launched successfully, but `page.goto(http://127.0.0.1:...)` was blocked before the application loaded.
+- Production build: could not be re-run in this sandbox because the uploaded `node_modules` is missing the Linux native optional Rolldown binding. This is an environment/package-install issue; run `npm install` on the deployment machine before `npm run build`.

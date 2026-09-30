@@ -1,34 +1,37 @@
-MaintenanceOS V18E - Resin Printer and Wash & Cure Workflows
+MaintenanceOS V18E - Resin Printer + Wash & Cure Service Workflows
 
-Built from the latest working Git project folder supplied by Simon.
+Built from the working project folder supplied by the user.
 
 What changed:
-- Added Resin Printer service workflow.
-- Added Wash & Cure Station service workflow.
-- FDM 3D printer workflow retained.
-- AGV workflow retained.
-- Service form now chooses the correct workflow based on asset name, type, model and location.
-- Non-pass / non-good checks still reveal reason/action note boxes.
+- Added equipment-specific service workflow detection.
+- AGV assets open the AGV service workflow.
+- FDM / standard 3D printer assets open the FDM 3D printer service workflow.
+- Resin printer assets open the Resin Printer service workflow.
+- Wash & Cure Station assets open the Wash & Cure Station service workflow.
+- General equipment falls back to a generic service workflow.
+- Service forms now open as modal popups from Maintenance and Asset pages.
+- If a check is not Pass / Good / OK / N/A, a reason/action field appears.
+- Completing a service updates asset status and next service date.
+- Service summary is logged to audit_log when available.
+
+How asset workflow is selected:
+- Type/name/model containing AGV -> AGV workflow
+- Type/name/model containing Resin / SLA / MSLA -> Resin workflow
+- Type/name/model containing Wash or Cure -> Wash & Cure workflow
+- Type/name/model containing FDM / Printer / 3D -> FDM printer workflow
+- Otherwise -> General workflow
+
+Recommended asset type names:
+- AGV
+- FDM 3D Printer
+- Resin Printer
+- Wash & Cure Station
+- General Equipment
+
+Database:
 - No database reset required.
-- No Supabase schema changes required.
+- No new SQL is required for this patch.
+- Existing assets and repairs remain untouched.
 
-Workflow detection:
-- AGV: asset name/type/model includes AGV, automated guided, vehicle.
-- Wash & Cure: asset name/type/model/location includes wash, cure, curing or IPA.
-- Resin printer: asset name/type/model/location includes resin, SLA, LCD or MSLA.
-- FDM printer: normal printer / 3D print assets that are not resin or wash/cure.
-
-Install:
-1. Back up your current project folder.
-2. Copy this update over the current working project folder.
-3. Keep your existing .env file.
-4. Run npm install.
-5. Run npm run dev.
-6. Test AGV, FDM printer, Resin printer and Wash & Cure service forms.
-
-Push:
-1. git status
-2. Confirm .env is not included.
-3. git add .
-4. git commit -m "V18E resin and wash cure service workflows"
-5. git push
+Important:
+- Keep your existing .env file when installing.

@@ -408,10 +408,13 @@ async function renderAssetDetail(id) {
       <div class="card qr-mini">
         <h2>QR Link</h2>
         <img src="${qr}" alt="QR code" />
-        <button onclick="navigator.clipboard.writeText('${qrUrl}'); window.toast?.('Asset link copied.', 'success')">Copy Asset Link</button><button class="primary" onclick="document.querySelector('#repairTitle')?.focus()">Report Fault</button>
+        <div class="qr-actions">
+          <button onclick="navigator.clipboard.writeText('${qrUrl}'); window.toast?.('Asset link copied.', 'success')">Copy Asset Link</button>
+          <button class="primary" onclick="document.querySelector('#repairTitle')?.focus()">Report Fault</button>
+        </div>
       </div>
     </section>
-    <section class="card">
+    <section class="card asset-fault-form">
       <h2>Report Fault</h2>
       <p class="muted">QR workflow: scan, describe fault, attach photo, submit.</p>
       <div id="messageBox" class="message hidden"></div>
