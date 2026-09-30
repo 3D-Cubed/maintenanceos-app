@@ -1,3 +1,6 @@
+
+## 1.21.3 — Parts Glass UI
+- Visual-only Parts card refinement: preserved image aspect ratios, glass media tiles, consistent card/action layout, improved metadata contrast and readable teal Supplier links. No database changes.
 ## 1.21.2 — Parts Intelligence
 - Restored legacy inventory visibility and added parts intelligence, compatibility filtering, stock audit, automatic parts-cost calculation, low-stock actions and repeat-failure signals.
 
