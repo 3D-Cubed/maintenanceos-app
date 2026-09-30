@@ -25,3 +25,9 @@ The uploaded ZIP was used as the sole source baseline.
 
 ## 1.21.0
 - Added fault reporter traceability and inventory-backed repair parts workflow.
+
+## V21.4 — Atom3D Signature Parts UI
+- Premium Parts card visual redesign.
+- Correct image aspect ratio retained.
+- Supplier link standardised as a button.
+- No database or workflow changes.
