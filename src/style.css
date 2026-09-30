@@ -1004,3 +1004,22 @@ button.compact { padding:7px 10px; min-height:0; }
 .stock-count b { font-size:1.35rem; }
 .stock-count.low { color:#ffb86b; }
 @media(max-width:720px){ .part-picker-row{grid-template-columns:1fr 80px}.part-picker-row button{width:100%} }
+
+
+/* V21.1 restored full Parts Inventory */
+.parts-control-card { padding: 16px 20px; }
+.parts-toolbar { display:grid; grid-template-columns:minmax(260px,2fr) repeat(3,minmax(150px,1fr)); gap:12px; }
+.parts-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(360px,1fr)); gap:16px; }
+.part-card { display:grid; grid-template-columns:120px minmax(0,1fr); overflow:hidden; border:1px solid rgba(92,214,188,.18); border-radius:18px; background:rgba(255,255,255,.025); min-height:150px; }
+.part-image { width:120px; height:100%; min-height:150px; object-fit:cover; background:rgba(255,255,255,.04); }
+.part-image.placeholder { display:grid; place-items:center; color:var(--muted); font-weight:800; letter-spacing:.12em; }
+.part-card-body { padding:16px; display:grid; gap:10px; align-content:start; min-width:0; }
+.part-card-head { display:flex; justify-content:space-between; gap:16px; }
+.part-card-head h3 { margin:4px 0 3px; }
+.part-card-head p,.part-notes { margin:0; }
+.part-equipment { display:inline-flex; padding:4px 8px; border-radius:999px; background:rgba(47,218,183,.1); border:1px solid rgba(47,218,183,.2); font-size:.72rem; font-weight:800; text-transform:uppercase; letter-spacing:.08em; }
+.part-meta { display:flex; flex-wrap:wrap; gap:8px 14px; font-size:.82rem; color:var(--muted); }
+.part-link { justify-self:start; text-decoration:none; }
+.part-form-card { width:min(900px,calc(100vw - 32px)); max-height:calc(100vh - 40px); overflow:auto; }
+@media(max-width:900px){.parts-toolbar{grid-template-columns:1fr 1fr}.parts-grid{grid-template-columns:1fr}}
+@media(max-width:600px){.parts-toolbar{grid-template-columns:1fr}.part-card{grid-template-columns:90px minmax(0,1fr)}.part-image{width:90px}.part-card-head{flex-direction:column}.stock-count{text-align:left}}

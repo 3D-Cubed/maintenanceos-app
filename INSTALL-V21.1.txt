@@ -1,0 +1,12 @@
+MaintenanceOS V21.1 INSTALL
+
+1. In Supabase SQL Editor run DB-V21.1-PARTS-COMPATIBILITY.sql.
+2. Copy this release over your existing cloned maintenanceos-app folder. Keep your existing .env.
+3. In CMD inside maintenanceos-app run: npm run build
+4. If successful run: git status
+5. Then: git add .
+6. Then: git commit -m "MaintenanceOS V21.1 restore Parts Inventory"
+7. Then: git push origin main
+8. Vercel will deploy automatically.
+
+No destructive database reset is required.
