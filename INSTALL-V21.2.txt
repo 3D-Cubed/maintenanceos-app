@@ -1,0 +1,11 @@
+MaintenanceOS V21.2 installation
+
+1. In Supabase SQL Editor run DB-V21.2-PARTS-INTELLIGENCE.sql and confirm Success.
+2. Copy this release over the existing local maintenanceos-app Git clone (do not delete the .git folder).
+3. In CMD from maintenanceos-app run: npm run build
+4. If build succeeds run: git status
+5. Then: git add .
+6. Then: git commit -m "MaintenanceOS V21.2 Parts Intelligence"
+7. Then: git push origin main
+8. Wait for the connected Vercel deployment to become Ready, then hard refresh the live app.
+9. Verify existing parts appear, open a part history, perform a test stock adjustment, and test a repair using an inventory part.

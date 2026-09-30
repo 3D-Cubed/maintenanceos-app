@@ -9,6 +9,8 @@ let assets = []
 let repairs = []
 let maintenance = []
 let partsInventory = []
+let partsUsage = []
+let stockMovements = []
 let selectedRepairParts = []
 let activePage = 'dashboard'
 let resolveContext = null
@@ -159,22 +161,28 @@ function renderAuth() {
 
 async function loadData() {
   try {
-    const [assetResult, repairResult, maintenanceResult, partsResult] = await Promise.all([
+    const [assetResult, repairResult, maintenanceResult, partsResult, usageResult, movementResult] = await Promise.all([
       supabase.from('assets').select('*').or('archived.is.null,archived.eq.false').order('created_at', { ascending: false }),
       supabase.from('repair_tickets').select('*').order('created_at', { ascending: false }),
       supabase.from('maintenance_tasks').select('*').order('due_date', { ascending: true }),
-      supabase.from('parts_inventory').select('*').order('part_name', { ascending: true })
+      supabase.from('parts_inventory').select('*').order('part_name', { ascending: true }),
+      supabase.from('parts_usage').select('*').order('created_at', { ascending: false }),
+      supabase.from('parts_stock_movements').select('*').order('created_at', { ascending: false })
     ])
 
     if (assetResult.error) console.warn(assetResult.error.message)
     if (repairResult.error) console.warn(repairResult.error.message)
     if (maintenanceResult.error && !maintenanceResult.error.message.includes('maintenance_tasks')) console.warn(maintenanceResult.error.message)
     if (partsResult.error) console.warn(partsResult.error.message)
+    if (usageResult.error && !usageResult.error.message.includes('parts_usage')) console.warn(usageResult.error.message)
+    if (movementResult.error && !movementResult.error.message.includes('parts_stock_movements')) console.warn(movementResult.error.message)
 
     assets = assetResult.data || []
     repairs = repairResult.data || []
     maintenance = maintenanceResult.data || []
     partsInventory = partsResult.data || []
+    partsUsage = usageResult.data || []
+    stockMovements = movementResult.data || []
   } catch (err) {
     console.warn('Data load skipped:', err?.message || err)
     assets = []
@@ -277,6 +285,8 @@ function renderDashboard() {
   const openRepairs = repairs.filter(r => r.status !== 'Resolved').length
   const overdueRepairs = repairs.filter(r => getRepairHealth(r).state === 'overdue').length
   const criticalOpen = repairs.filter(r => r.status !== 'Resolved' && r.priority === 'Critical').length
+  const lowStock = partsInventory.filter(p => Number(p.quantity_in_stock || 0) <= Number(p.minimum_stock_level || 0)).length
+  const repeatSignals = getRepeatFailureSignals()
 
   content().innerHTML = `
     ${renderHeader('LIVE FLEET OVERVIEW', 'Dashboard', '<button id="refresh">Refresh</button>')}
@@ -286,6 +296,7 @@ function renderDashboard() {
       ${statCard('Under Repair', underRepair, 'Active engineering work')}
       ${statCard('Needs Attention', attention, 'Service or inspection required')}
       ${statCard('Overdue Faults', overdueRepairs, `${criticalOpen} critical open`)}
+      ${statCard('Engineering Attention', repeatSignals.length + lowStock, `${repeatSignals.length} repeat-failure signals • ${lowStock} low-stock parts`)}
     </section>
     <section class="grid two">
       <div class="card">
@@ -306,6 +317,11 @@ function renderDashboard() {
         </div>
         ${repairs.filter(r => r.status !== 'Resolved').slice(0, 6).map(repairRow).join('') || '<p class="muted">No active faults.</p>'}
       </div>
+    </section>
+    <section class="card engineering-attention">
+      <div class="section-title-row compact"><div><h2>Engineering Attention</h2><p class="muted">Deterministic signals from repeat faults and stock levels.</p></div></div>
+      ${repeatSignals.slice(0,5).map(x => `<div class="attention-row"><div><b>Repeat failure • ${escapeHtml(x.assetName)}</b><p>${escapeHtml(x.label)} — ${x.count} related faults in ${x.days} days.</p></div><span class="badge warning">Investigate</span></div>`).join('') || '<p class="muted">No repeat-failure pattern detected.</p>'}
+      ${partsInventory.filter(p=>Number(p.quantity_in_stock||0)<=Number(p.minimum_stock_level||0)).slice(0,5).map(p=>`<div class="attention-row"><div><b>Low stock • ${escapeHtml(p.part_name||'Part')}</b><p>${Number(p.quantity_in_stock||0)} remaining • minimum ${Number(p.minimum_stock_level||0)}</p></div>${p.supplier_url?`<a class="ghost compact" href="${escapeHtml(p.supplier_url)}" target="_blank" rel="noopener">Supplier</a>`:''}</div>`).join('')}
     </section>
   `
   document.querySelector('#refresh').onclick = async () => { await loadData(); renderDashboard() }
@@ -601,7 +617,7 @@ function ensureResolveModal() {
             <div id="selectedRepairParts" class="selected-parts"></div>
           </div>
           <label class="field-label">Repair cost (£)
-            <input id="resolutionCost" type="number" min="0" step="0.01" placeholder="0.00" />
+            <input id="resolutionCost" type="number" min="0" step="0.01" placeholder="0.00" /><small id="partsCostHint" class="muted">Calculated parts cost: £0.00</small>
           </label>
           <label class="field-label">Downtime (hours)
             <input id="resolutionDowntime" type="number" min="0" step="0.1" placeholder="0.0" />
@@ -622,6 +638,7 @@ function ensureResolveModal() {
   document.querySelector('#confirmResolve').onclick = confirmResolveRepair
   document.querySelector('#addSelectedPart').onclick = addSelectedRepairPart
   document.querySelector('#openNewPart').onclick = () => openPartModal(true)
+  document.querySelector('#resolutionCost').addEventListener('input',e=>e.currentTarget.dataset.manual='true')
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape') closeResolveModal()
   })
@@ -631,13 +648,15 @@ function ensureResolveModal() {
 function renderRepairPartPicker() {
   const select = document.querySelector('#resolutionPartSelect')
   if (!select) return
-  const available = partsInventory.filter(p => Number(p.quantity_in_stock || 0) > 0)
+  const asset = assets.find(a => a.id === resolveContext?.assetId)
+  const targetEquipment = equipmentClassForAsset(asset)
+  const available = partsInventory.filter(p => Number(p.quantity_in_stock || 0) > 0 && (!targetEquipment || ['General', targetEquipment].includes(p.equipment_type || 'General')))
   select.innerHTML = available.length
-    ? available.map(p => `<option value="${p.id}">${escapeHtml(p.part_name || p.name || p.part_number || 'Unnamed part')} • ${Number(p.quantity_in_stock || 0)} in stock</option>`).join('')
+    ? available.map(p => `<option value="${p.id}">${escapeHtml(p.part_name || p.name || p.part_number || 'Unnamed part')} • ${escapeHtml(p.equipment_type||'General')} • ${Number(p.quantity_in_stock || 0)} in stock • £${Number(p.price||0).toFixed(2)}</option>`).join('')
     : '<option value="">No stocked parts available</option>'
   const list = document.querySelector('#selectedRepairParts')
   if (list) list.innerHTML = selectedRepairParts.length ? selectedRepairParts.map((p, i) => `
-    <div class="selected-part"><span><b>${escapeHtml(p.part_name || p.name || p.part_number || 'Part')}</b> × ${p.quantity}</span><button type="button" class="ghost compact" onclick="window.removeRepairPart(${i})">Remove</button></div>`).join('') : '<small class="muted">No parts selected.</small>'
+    <div class="selected-part"><span>${p.image_url?`<img class="part-thumb" src="${escapeHtml(p.image_url)}" alt=""/>`:''}<b>${escapeHtml(p.part_name || p.name || p.part_number || 'Part')}</b> × ${p.quantity} <small>£${(Number(p.price||0)*p.quantity).toFixed(2)}</small></span><button type="button" class="ghost compact" onclick="window.removeRepairPart(${i})">Remove</button></div>`).join('') : '<small class="muted">No parts selected.</small>'
 }
 
 function addSelectedRepairPart() {
@@ -719,7 +738,44 @@ function renderParts() {
 function partCard(p) {
   const qty=Number(p.quantity_in_stock||0), min=Number(p.minimum_stock_level||0), low=qty<=min
   const img=p.image_url ? `<img class="part-image" src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.part_name||'Part')}"/>` : `<div class="part-image placeholder">PART</div>`
-  return `<article class="part-card">${img}<div class="part-card-body"><div class="part-card-head"><div><span class="part-equipment">${escapeHtml(p.equipment_type||'General')}</span><h3>${escapeHtml(p.part_name||'Unnamed part')}</h3><p>${escapeHtml(p.part_number||'No part number')} • ${escapeHtml(p.category||'Uncategorised')}</p></div><div class="stock-count ${low?'low':''}"><b>${qty}</b><small>in stock</small></div></div><div class="part-meta"><span>Min: ${min}</span><span>${escapeHtml(p.stock_location||'No location')}</span><span>£${Number(p.price||0).toFixed(2)} each</span></div>${p.supplier_name?`<small>${escapeHtml(p.supplier_name)}</small>`:''}${p.notes?`<p class="part-notes">${escapeHtml(p.notes)}</p>`:''}${p.supplier_url?`<a class="ghost compact part-link" href="${escapeHtml(p.supplier_url)}" target="_blank" rel="noopener">Supplier link</a>`:''}</div></article>`
+  return `<article class="part-card">${img}<div class="part-card-body"><div class="part-card-head"><div><span class="part-equipment">${escapeHtml(p.equipment_type||'General')}</span><h3>${escapeHtml(p.part_name||'Unnamed part')}</h3><p>${escapeHtml(p.part_number||'No part number')} • ${escapeHtml(p.category||'Uncategorised')}</p></div><div class="stock-count ${low?'low':''}"><b>${qty}</b><small>in stock</small></div></div><div class="part-meta"><span>Min: ${min}</span><span>${escapeHtml(p.stock_location||'No location')}</span><span>£${Number(p.price||0).toFixed(2)} each</span></div>${p.supplier_name?`<small>${escapeHtml(p.supplier_name)}</small>`:''}${p.notes?`<p class="part-notes">${escapeHtml(p.notes)}</p>`:''}<div class="part-actions"><button class="ghost compact" onclick="window.openPartDetail('${p.id}')">View history</button><button class="ghost compact" onclick="window.adjustPartStock('${p.id}')">Adjust stock</button>${p.supplier_url?`<a class="ghost compact part-link" href="${escapeHtml(p.supplier_url)}" target="_blank" rel="noopener">Supplier</a>`:''}</div></div></article>`
+}
+
+
+function equipmentClassForAsset(asset) {
+  const text=`${asset?.type||''} ${asset?.name||''} ${asset?.model||''}`.toLowerCase()
+  if(text.includes('agv')) return 'AGV'
+  if(text.includes('printer') || text.includes('fdm') || text.includes('resin') || text.includes('bambu')) return '3D Printer'
+  return null
+}
+function getRepeatFailureSignals() {
+  const now=Date.now(), windowMs=90*86400000, groups=new Map()
+  repairs.filter(r=>new Date(r.created_at).getTime()>=now-windowMs).forEach(r=>{
+    const label=(r.title||'Fault').trim().toLowerCase().replace(/[^a-z0-9 ]/g,'').split(/\s+/).filter(w=>w.length>3).slice(0,3).join(' ') || 'fault'
+    const key=`${r.asset_id}|${label}`; const arr=groups.get(key)||[]; arr.push(r); groups.set(key,arr)
+  })
+  return [...groups.entries()].filter(([,arr])=>arr.length>=2).map(([key,arr])=>{
+    const [assetId,label]=key.split('|'); const dates=arr.map(r=>new Date(r.created_at).getTime()).sort((a,b)=>a-b)
+    return {assetId,assetName:assets.find(a=>a.id===assetId)?.name||'Unknown asset',label,count:arr.length,days:Math.max(1,Math.round((dates.at(-1)-dates[0])/86400000))}
+  }).sort((a,b)=>b.count-a.count)
+}
+window.openPartDetail = id => {
+  const p=partsInventory.find(x=>x.id===id); if(!p) return
+  const usage=partsUsage.filter(x=>x.part_id===id); const moves=stockMovements.filter(x=>x.part_id===id)
+  const totalUsed=usage.reduce((n,x)=>n+Number(x.quantity_used||x.quantity||0),0)
+  const spend=usage.reduce((n,x)=>n+Number(x.quantity_used||x.quantity||0)*Number(x.unit_cost_snapshot||x.unit_cost||p.price||0),0)
+  const assetNames=[...new Set(usage.map(x=>assets.find(a=>a.id===x.asset_id)?.name).filter(Boolean))]
+  let m=document.querySelector('#partDetailModal'); if(m) m.remove()
+  document.body.insertAdjacentHTML('beforeend',`<div id="partDetailModal" class="resolve-modal"><div class="resolve-backdrop" onclick="document.querySelector('#partDetailModal').remove()"></div><section class="resolve-card part-detail-card"><div class="resolve-head"><div><p class="eyebrow">PART INTELLIGENCE</p><h2>${escapeHtml(p.part_name||'Part')}</h2><p class="muted">${escapeHtml(p.part_number||'No part number')} • ${escapeHtml(p.equipment_type||'General')}</p></div><button class="icon-btn" onclick="document.querySelector('#partDetailModal').remove()">×</button></div>${p.image_url?`<img class="part-detail-image" src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.part_name||'Part')}"/>`:''}<section class="stats-grid compact-stats">${statCard('In Stock',Number(p.quantity_in_stock||0),'Current quantity')}${statCard('Total Used',totalUsed,'Recorded consumption')}${statCard('Usage Spend',`£${spend.toFixed(2)}`,'Snapshotted component cost')}${statCard('Assets',assetNames.length,assetNames.slice(0,2).join(', ')||'No usage yet')}</section><h3>Usage history</h3><div class="history-list">${usage.slice(0,20).map(u=>`<div class="data-row"><div><b>${escapeHtml(u.part_name_snapshot||p.part_name||'Part')} × ${Number(u.quantity_used||u.quantity||0)}</b><p>${escapeHtml(assets.find(a=>a.id===u.asset_id)?.name||'Unknown asset')} • ${new Date(u.created_at).toLocaleDateString()}</p></div><span>£${(Number(u.unit_cost_snapshot||u.unit_cost||p.price||0)*Number(u.quantity_used||u.quantity||0)).toFixed(2)}</span></div>`).join('')||'<p class="muted">No recorded repair usage yet.</p>'}</div><h3>Stock adjustments</h3><div class="history-list">${moves.slice(0,20).map(x=>`<div class="data-row"><div><b>${Number(x.quantity_change)>0?'+':''}${Number(x.quantity_change)} • ${escapeHtml(x.reason||'Adjustment')}</b><p>${new Date(x.created_at).toLocaleString()}</p></div></div>`).join('')||'<p class="muted">No manual adjustments yet.</p>'}</div></section></div>`)
+}
+window.adjustPartStock = async id => {
+  const p=partsInventory.find(x=>x.id===id); if(!p) return
+  const raw=prompt(`Adjust stock for ${p.part_name}. Enter quantity change (e.g. 5 or -2):`); if(raw===null) return
+  const change=Number(raw); if(!Number.isInteger(change)||change===0) return toast('Enter a non-zero whole number.','error')
+  if(Number(p.quantity_in_stock||0)+change<0) return toast('Stock cannot go below zero.','error')
+  const reason=prompt('Reason: Stock received, manual correction, damaged, used outside repair, etc.'); if(!reason?.trim()) return toast('A reason is required for the stock audit trail.','error')
+  const {error}=await supabase.rpc('adjust_part_stock_v212',{p_part_id:id,p_change:change,p_reason:reason.trim()}); if(error) return toast(`Stock was not adjusted: ${error.message}`,'error')
+  await loadData(); renderParts(); toast('Stock adjusted and audit trail recorded.','success')
 }
 
 function toast(message, type = 'info') {

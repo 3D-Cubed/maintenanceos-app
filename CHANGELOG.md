@@ -1,3 +1,6 @@
+## 1.21.2 — Parts Intelligence
+- Restored legacy inventory visibility and added parts intelligence, compatibility filtering, stock audit, automatic parts-cost calculation, low-stock actions and repeat-failure signals.
+
 # Changelog
 
 ## 1.19.0 — 2026-09-30
