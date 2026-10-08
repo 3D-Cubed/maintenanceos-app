@@ -1,0 +1,24 @@
+MAINTENANCEOS V21.6 INSTALLATION
+
+1. Open Supabase -> SQL Editor.
+2. Run DB-V21.6-TEST-FIXES.sql.
+3. Confirm the SQL completes successfully.
+4. Replace the files in your existing maintenanceos-app Git repository with this release.
+5. Open CMD in the repository folder.
+6. Run: npm install
+   (Package version has changed, so this release intentionally refreshes dependencies/lockfile.)
+7. Run: npm run build
+8. If the build succeeds, run:
+   git status
+   git add .
+   git commit -m "MaintenanceOS V21.6 test findings fixes"
+   git push origin main
+9. Vercel should automatically deploy the new main branch.
+
+Recommended live checks:
+- Adjust stock on a part and confirm quantity/history changes.
+- Report a fault and confirm it creates successfully.
+- Edit an asset location and confirm the change appears in Asset History Timeline.
+- Open a QR label in a new tab and confirm it lands on the exact asset record.
+- Open the QR link on a device/browser that has not entered the app before.
+- Open Part Intelligence and confirm £0.00 remains inside its metric tile.

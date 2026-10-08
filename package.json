@@ -1,6 +1,6 @@
 {
   "name": "maintenanceos-app",
-  "version": "1.21.2",
+  "version": "1.21.6",
   "private": true,
   "type": "module",
   "scripts": {

@@ -11,6 +11,7 @@ let maintenance = []
 let partsInventory = []
 let partsUsage = []
 let stockMovements = []
+let assetHistory = []
 let selectedRepairParts = []
 let activePage = 'dashboard'
 let resolveContext = null
@@ -114,13 +115,19 @@ async function init() {
   // V15 development entry mode: always show the entry screen per browser session.
   // Clear any older persistent flag so a cached localStorage value cannot bypass or blank the landing screen.
   localStorage.removeItem('maintenanceos_entered')
+  const deepLinkedAsset = getDeepLinkedAssetId()
   const hasEntered = sessionStorage.getItem('maintenanceos_entered') === 'true'
-  if (!hasEntered) {
+  if (!hasEntered && !deepLinkedAsset) {
     renderAuth()
     return
   }
 
   session = { user: { email: 'development@maintenanceos.local' } }
+  if (deepLinkedAsset) {
+    await loadData()
+    await renderAssetDetail(deepLinkedAsset)
+    return
+  }
   handleRoute()
   await loadData()
   renderPage()
@@ -161,13 +168,14 @@ function renderAuth() {
 
 async function loadData() {
   try {
-    const [assetResult, repairResult, maintenanceResult, partsResult, usageResult, movementResult] = await Promise.all([
+    const [assetResult, repairResult, maintenanceResult, partsResult, usageResult, movementResult, assetHistoryResult] = await Promise.all([
       supabase.from('assets').select('*').or('archived.is.null,archived.eq.false').order('created_at', { ascending: false }),
       supabase.from('repair_tickets').select('*').order('created_at', { ascending: false }),
       supabase.from('maintenance_tasks').select('*').order('due_date', { ascending: true }),
       supabase.from('parts_inventory').select('*').order('part_name', { ascending: true }),
       supabase.from('parts_usage').select('*').order('created_at', { ascending: false }),
-      supabase.from('parts_stock_movements').select('*').order('created_at', { ascending: false })
+      supabase.from('parts_stock_movements').select('*').order('created_at', { ascending: false }),
+      supabase.from('asset_history').select('*').order('created_at', { ascending: false })
     ])
 
     if (assetResult.error) console.warn(assetResult.error.message)
@@ -176,6 +184,7 @@ async function loadData() {
     if (partsResult.error) console.warn(partsResult.error.message)
     if (usageResult.error && !usageResult.error.message.includes('parts_usage')) console.warn(usageResult.error.message)
     if (movementResult.error && !movementResult.error.message.includes('parts_stock_movements')) console.warn(movementResult.error.message)
+    if (assetHistoryResult.error && !assetHistoryResult.error.message.includes('asset_history')) console.warn(assetHistoryResult.error.message)
 
     assets = assetResult.data || []
     repairs = repairResult.data || []
@@ -183,25 +192,36 @@ async function loadData() {
     partsInventory = partsResult.data || []
     partsUsage = usageResult.data || []
     stockMovements = movementResult.data || []
+    assetHistory = assetHistoryResult.data || []
   } catch (err) {
     console.warn('Data load skipped:', err?.message || err)
     assets = []
     repairs = []
     maintenance = []
     partsInventory = []
+    assetHistory = []
   }
+}
+
+function getDeepLinkedAssetId() {
+  const hash = location.hash.replace(/^#/, '')
+  if (hash.startsWith('asset/')) return hash.slice(6) || null
+  const queryId = new URLSearchParams(location.search).get('asset')
+  return queryId || null
 }
 
 function handleRoute() {
   closeResolveModal()
   closeServiceModal()
   window.closeImagePreview?.()
-  const hash = location.hash.replace('#', '')
-  if (hash.startsWith('asset/')) {
-    renderShell(false)
-    renderAssetDetail(hash.replace('asset/', ''))
+  const assetId = getDeepLinkedAssetId()
+  if (assetId) {
+    activePage = 'assets'
+    renderShell(true)
+    renderAssetDetail(assetId)
     return
   }
+  const hash = location.hash.replace('#', '')
   activePage = hash || activePage || 'dashboard'
   renderShell(true)
   renderPage()
@@ -412,7 +432,7 @@ async function renderAssetDetail(id) {
     return
   }
   const assetRepairs = repairs.filter(r => r.asset_id === id)
-  const qrUrl = `${location.origin}${location.pathname}#asset/${a.id}`
+  const qrUrl = `${location.origin}${location.pathname}?asset=${encodeURIComponent(a.id)}`
   const qr = await QRCode.toDataURL(qrUrl)
 
   content().innerHTML = `
@@ -1049,7 +1069,7 @@ async function renderQR() {
 
   const grid = document.querySelector('#qrGrid')
   for (const a of assets) {
-    const url = `${location.origin}${location.pathname}#asset/${a.id}`
+    const url = `${location.origin}${location.pathname}?asset=${encodeURIComponent(a.id)}`
     const qr = await QRCode.toDataURL(url, { margin: 1, width: 360 })
     grid.innerHTML += `
       <div class="qr-card">
@@ -1258,8 +1278,12 @@ function statusClass(status = 'Operational') {
 }
 
 function assetHistoryTimeline(asset, assetRepairs) {
+  const editEvents = assetHistory.filter(h => h.asset_id === asset.id).map(h => ({
+    date: h.created_at, title: h.title || 'Asset updated', body: h.detail || 'Asset record updated', tone: 'created'
+  }))
   const items = [
     { date: asset.created_at, title: 'Asset created', body: `${asset.type || 'Asset'} registered in ${asset.location || 'no location set'}`, tone: 'created' },
+    ...editEvents,
     ...assetRepairs.map(r => ({
       date: r.created_at,
       title: r.status === 'Resolved' ? `Fault resolved: ${r.title || 'Ticket'}` : `Fault reported: ${r.title || 'Ticket'}`,
