@@ -1,0 +1,15 @@
+{
+  "name": "Maintenance Hub",
+  "short_name": "Maintenance Hub",
+  "description": "Medstrom engineering maintenance and asset management platform",
+  "start_url": "/#dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#02080b",
+  "theme_color": "#06101c",
+  "icons": [
+    {"src":"/icons/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"/icons/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}

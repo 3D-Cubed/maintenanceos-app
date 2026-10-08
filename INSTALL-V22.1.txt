@@ -1,26 +1,32 @@
-MaintenanceOS V22.1 — Installation
+MaintenanceOS V22.1 — PWA INSTALLATION
 
-1. Back up the production Supabase database.
-2. Open Supabase → SQL Editor.
-3. Run DB-V22.1-STABILITY-CACHE-FIX.sql in full.
-4. Confirm the SQL completes successfully.
-5. In the project folder run:
+1. Replace the existing project source with this release.
+2. Preserve the existing .env / Vercel environment variables.
+3. From the project directory run:
    npm install
-6. Build:
+4. Verify the production build:
    npm run build
-7. If the build succeeds:
+5. Commit and push:
    git add .
-   git commit -m "MaintenanceOS V22.1 stability cache fix"
+   git commit -m "MaintenanceOS V22.1 mobile PWA"
    git push origin main
-8. Allow Vercel to deploy.
-9. Hard refresh the live site with Ctrl+F5.
+6. Allow Vercel to deploy.
 
-Live verification:
-- Open an existing QR URL using ?asset=<uuid>.
-- Confirm the asset opens directly.
-- Open Part Intelligence and confirm there is no horizontal scrollbar.
-- Adjust stock by +1 and verify quantity and Stock adjustments update.
-- Adjust stock by -1 and verify the reverse movement is recorded.
-- Report a test fault and confirm it appears as an active fault.
-- Confirm the asset changes to Needs Attention after fault reporting.
-- Do not test against a production-critical asset if a test asset is available.
+PHONE INSTALLATION — ANDROID / CHROME / EDGE
+1. Open the live Maintenance Hub URL.
+2. Use the browser's Install app / Add to home screen option, or use the Install App button when shown.
+3. Launch Maintenance Hub from the new home-screen icon.
+
+IPHONE / IPAD
+1. Open Maintenance Hub in Safari.
+2. Tap Share.
+3. Select Add to Home Screen.
+4. Launch from the new Maintenance Hub icon.
+
+ACCEPTANCE TESTS
+- Desktop still loads normally.
+- Phone opens in a standalone app window after installation.
+- Bottom navigation remains usable.
+- QR deep links still open the correct asset.
+- Fault photo input can use the phone camera where supported.
+- Supabase live data remains network-backed and is not cached by the service worker.

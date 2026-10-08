@@ -17,6 +17,7 @@ let activePage = 'dashboard'
 let resolveContext = null
 let resolvingTicket = false
 let submittingFault = false
+let deferredInstallPrompt = null
 
 const statusOptions = ['Operational', 'Needs Attention', 'Under Repair', 'Out of Service']
 const priorityOptions = ['Low', 'Medium', 'High', 'Critical']
@@ -104,6 +105,20 @@ const serviceWorkflows = {
   }
 }
 
+
+// PWA installation support. Chromium-based browsers will surface the native install prompt.
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault()
+  deferredInstallPrompt = event
+  document.querySelector('#installApp')?.classList.remove('hidden')
+})
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null
+  document.querySelector('#installApp')?.classList.add('hidden')
+})
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch((err) => console.warn('PWA service worker registration failed:', err)))
+}
 
 init()
 
@@ -252,6 +267,7 @@ function renderShell(withSidebar = true) {
         ${navButton('parts', 'Parts')}
         ${navButton('qr', 'QR Labels')}
         ${navButton('reports', 'Reports')}
+        <button id="installApp" class="nav install-app hidden">Install App</button>
         <button id="logout" class="nav danger">Exit</button>
       </aside>` : ''}
     <main class="main ${withSidebar ? '' : 'full'}">
@@ -270,6 +286,13 @@ function renderShell(withSidebar = true) {
       localStorage.removeItem('maintenanceos_entered')
       location.hash = ''
       location.reload()
+    })
+    document.querySelector('#installApp')?.addEventListener('click', async () => {
+      if (!deferredInstallPrompt) return
+      deferredInstallPrompt.prompt()
+      await deferredInstallPrompt.userChoice
+      deferredInstallPrompt = null
+      document.querySelector('#installApp')?.classList.add('hidden')
     })
   }
 }
@@ -475,7 +498,7 @@ async function renderAssetDetail(id) {
       <div class="form-grid">
         <select id="repairPriority">${priorityOptions.map(o => `<option>${o}</option>`).join('')}</select>
       </div>
-      <label class="file-label">Attach photo <input id="repairPhoto" type="file" accept="image/*" /></label>
+      <label class="file-label">Attach photo <input id="repairPhoto" type="file" accept="image/*" capture="environment" /></label>
       <button id="saveRepair" class="primary">Report Fault</button>
     </section>
     <section class="card">
@@ -916,7 +939,7 @@ function renderRepairs() {
             <strong>Attach fault photo</strong>
             <small>Upload evidence of the fault or damage.</small>
           </span>
-          <input id="repairPhoto" type="file" accept="image/*" />
+          <input id="repairPhoto" type="file" accept="image/*" capture="environment" />
         </label>
 
         <div class="form-actions">
