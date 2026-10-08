@@ -1,0 +1,26 @@
+MaintenanceOS V22.1 — Installation
+
+1. Back up the production Supabase database.
+2. Open Supabase → SQL Editor.
+3. Run DB-V22.1-STABILITY-CACHE-FIX.sql in full.
+4. Confirm the SQL completes successfully.
+5. In the project folder run:
+   npm install
+6. Build:
+   npm run build
+7. If the build succeeds:
+   git add .
+   git commit -m "MaintenanceOS V22.1 stability cache fix"
+   git push origin main
+8. Allow Vercel to deploy.
+9. Hard refresh the live site with Ctrl+F5.
+
+Live verification:
+- Open an existing QR URL using ?asset=<uuid>.
+- Confirm the asset opens directly.
+- Open Part Intelligence and confirm there is no horizontal scrollbar.
+- Adjust stock by +1 and verify quantity and Stock adjustments update.
+- Adjust stock by -1 and verify the reverse movement is recorded.
+- Report a test fault and confirm it appears as an active fault.
+- Confirm the asset changes to Needs Attention after fault reporting.
+- Do not test against a production-critical asset if a test asset is available.

@@ -35,3 +35,9 @@ The uploaded ZIP was used as the sole source baseline.
 ## V22.0 — Stability Hardening
 - Consolidated QR, fault, stock, asset-history and Part Intelligence fixes.
 - Added single production hardening migration.
+
+## V22.1 — Stability Cache & Part Intelligence Finalisation
+- Restored production discovery of the stock adjustment and fault-reporting RPCs.
+- Added PostgREST schema cache reload notifications.
+- Widened Part Intelligence and removed horizontal overflow.
+- Preserved existing data and fault-first workflow.
