@@ -1,9 +1,3 @@
-# MaintenanceOS Changelog
-
-## V21.7
-- Fixed QR/copy asset links by using client-side hash deep links.
-- Existing query and hash links remain supported.
-
 
 ## 1.21.3 — Parts Glass UI
 - Visual-only Parts card refinement: preserved image aspect ratios, glass media tiles, consistent card/action layout, improved metadata contrast and readable teal Supplier links. No database changes.
@@ -37,3 +31,7 @@ The uploaded ZIP was used as the sole source baseline.
 - Correct image aspect ratio retained.
 - Supplier link standardised as a button.
 - No database or workflow changes.
+
+## V22.0 — Stability Hardening
+- Consolidated QR, fault, stock, asset-history and Part Intelligence fixes.
+- Added single production hardening migration.

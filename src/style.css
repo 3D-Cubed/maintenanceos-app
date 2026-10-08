@@ -1172,3 +1172,33 @@ a.part-link:hover{
   .stat h2 { font-size: 1.7rem; }
   .history-list .data-row > span { max-width: 100%; }
 }
+
+
+/* V22 stability + part intelligence layout hardening */
+.part-detail-card .compact-stats {
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  align-items: stretch;
+}
+.part-detail-card .compact-stats .stat {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+}
+.part-detail-card .compact-stats .stat-cost h2 {
+  white-space: nowrap;
+  overflow: visible;
+  font-size: clamp(1.7rem, 3vw, 2.25rem);
+  letter-spacing: -0.03em;
+}
+.part-detail-card .compact-stats .stat small {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 900px) {
+  .part-detail-card .compact-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+  .part-detail-card .compact-stats { grid-template-columns: 1fr; }
+}

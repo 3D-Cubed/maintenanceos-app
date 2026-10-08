@@ -125,6 +125,9 @@ async function init() {
   session = { user: { email: 'development@maintenanceos.local' } }
   if (deepLinkedAsset) {
     await loadData()
+    // Always build the normal application shell first so QR/deep-linked assets
+    // retain the full navigation and controls.
+    renderShell(true)
     await renderAssetDetail(deepLinkedAsset)
     return
   }
@@ -201,6 +204,10 @@ async function loadData() {
     partsInventory = []
     assetHistory = []
   }
+}
+
+function assetDeepLink(id) {
+  return `${location.origin}${location.pathname}#asset/${encodeURIComponent(id)}`
 }
 
 function getDeepLinkedAssetId() {
@@ -347,8 +354,8 @@ function renderDashboard() {
   document.querySelector('#refresh').onclick = async () => { await loadData(); renderDashboard() }
 }
 
-function statCard(label, value, sub) {
-  return `<div class="card stat"><p>${label}</p><h2>${value}</h2><small>${sub}</small></div>`
+function statCard(label, value, sub, extraClass = '') {
+  return `<div class="card stat ${extraClass}"><p>${label}</p><h2>${value}</h2><small>${sub}</small></div>`
 }
 
 function renderAssets() {
@@ -432,7 +439,7 @@ async function renderAssetDetail(id) {
     return
   }
   const assetRepairs = repairs.filter(r => r.asset_id === id)
-  const qrUrl = `${location.origin}${location.pathname}?asset=${encodeURIComponent(a.id)}`
+  const qrUrl = assetDeepLink(a.id)
   const qr = await QRCode.toDataURL(qrUrl)
 
   content().innerHTML = `
@@ -571,7 +578,7 @@ async function confirmResolveRepair() {
   confirmBtn.textContent = 'Saving repair…'
   let saved = false
   try {
-    const { error } = await supabase.rpc('complete_fault_repair_v21', {
+    const { error } = await supabase.rpc('complete_fault_repair_v22', {
       p_fault_id: context.repairId, p_asset_id: context.assetId,
       p_notes: notes, p_parts: parts, p_cost: cost, p_downtime: downtime
     })
@@ -786,7 +793,7 @@ window.openPartDetail = id => {
   const spend=usage.reduce((n,x)=>n+Number(x.quantity_used||x.quantity||0)*Number(x.unit_cost_snapshot||x.unit_cost||p.price||0),0)
   const assetNames=[...new Set(usage.map(x=>assets.find(a=>a.id===x.asset_id)?.name).filter(Boolean))]
   let m=document.querySelector('#partDetailModal'); if(m) m.remove()
-  document.body.insertAdjacentHTML('beforeend',`<div id="partDetailModal" class="resolve-modal"><div class="resolve-backdrop" onclick="document.querySelector('#partDetailModal').remove()"></div><section class="resolve-card part-detail-card"><div class="resolve-head"><div><p class="eyebrow">PART INTELLIGENCE</p><h2>${escapeHtml(p.part_name||'Part')}</h2><p class="muted">${escapeHtml(p.part_number||'No part number')} • ${escapeHtml(p.equipment_type||'General')}</p></div><button class="icon-btn" onclick="document.querySelector('#partDetailModal').remove()">×</button></div>${p.image_url?`<img class="part-detail-image" src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.part_name||'Part')}"/>`:''}<section class="stats-grid compact-stats">${statCard('In Stock',Number(p.quantity_in_stock||0),'Current quantity')}${statCard('Total Used',totalUsed,'Recorded consumption')}${statCard('Usage Spend',`£${spend.toFixed(2)}`,'Snapshotted component cost')}${statCard('Assets',assetNames.length,assetNames.slice(0,2).join(', ')||'No usage yet')}</section><h3>Usage history</h3><div class="history-list">${usage.slice(0,20).map(u=>`<div class="data-row"><div><b>${escapeHtml(u.part_name_snapshot||p.part_name||'Part')} × ${Number(u.quantity_used||u.quantity||0)}</b><p>${escapeHtml(assets.find(a=>a.id===u.asset_id)?.name||'Unknown asset')} • ${new Date(u.created_at).toLocaleDateString()}</p></div><span>£${(Number(u.unit_cost_snapshot||u.unit_cost||p.price||0)*Number(u.quantity_used||u.quantity||0)).toFixed(2)}</span></div>`).join('')||'<p class="muted">No recorded repair usage yet.</p>'}</div><h3>Stock adjustments</h3><div class="history-list">${moves.slice(0,20).map(x=>`<div class="data-row"><div><b>${Number(x.quantity_change)>0?'+':''}${Number(x.quantity_change)} • ${escapeHtml(x.reason||'Adjustment')}</b><p>${new Date(x.created_at).toLocaleString()}</p></div></div>`).join('')||'<p class="muted">No manual adjustments yet.</p>'}</div></section></div>`)
+  document.body.insertAdjacentHTML('beforeend',`<div id="partDetailModal" class="resolve-modal"><div class="resolve-backdrop" onclick="document.querySelector('#partDetailModal').remove()"></div><section class="resolve-card part-detail-card"><div class="resolve-head"><div><p class="eyebrow">PART INTELLIGENCE</p><h2>${escapeHtml(p.part_name||'Part')}</h2><p class="muted">${escapeHtml(p.part_number||'No part number')} • ${escapeHtml(p.equipment_type||'General')}</p></div><button class="icon-btn" onclick="document.querySelector('#partDetailModal').remove()">×</button></div>${p.image_url?`<img class="part-detail-image" src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.part_name||'Part')}"/>`:''}<section class="stats-grid compact-stats">${statCard('In Stock',Number(p.quantity_in_stock||0),'Current quantity')}${statCard('Total Used',totalUsed,'Recorded consumption')}${statCard('Usage Spend',`£${spend.toFixed(2)}`,'Snapshotted component cost','stat-cost')}${statCard('Assets',assetNames.length,assetNames.slice(0,2).join(', ')||'No usage yet')}</section><h3>Usage history</h3><div class="history-list">${usage.slice(0,20).map(u=>`<div class="data-row"><div><b>${escapeHtml(u.part_name_snapshot||p.part_name||'Part')} × ${Number(u.quantity_used||u.quantity||0)}</b><p>${escapeHtml(assets.find(a=>a.id===u.asset_id)?.name||'Unknown asset')} • ${new Date(u.created_at).toLocaleDateString()}</p></div><span>£${(Number(u.unit_cost_snapshot||u.unit_cost||p.price||0)*Number(u.quantity_used||u.quantity||0)).toFixed(2)}</span></div>`).join('')||'<p class="muted">No recorded repair usage yet.</p>'}</div><h3>Stock adjustments</h3><div class="history-list">${moves.slice(0,20).map(x=>`<div class="data-row"><div><b>${Number(x.quantity_change)>0?'+':''}${Number(x.quantity_change)} • ${escapeHtml(x.reason||'Adjustment')}</b><p>${new Date(x.created_at).toLocaleString()}</p></div></div>`).join('')||'<p class="muted">No manual adjustments yet.</p>'}</div></section></div>`)
 }
 window.adjustPartStock = async id => {
   const p=partsInventory.find(x=>x.id===id); if(!p) return
@@ -794,7 +801,7 @@ window.adjustPartStock = async id => {
   const change=Number(raw); if(!Number.isInteger(change)||change===0) return toast('Enter a non-zero whole number.','error')
   if(Number(p.quantity_in_stock||0)+change<0) return toast('Stock cannot go below zero.','error')
   const reason=prompt('Reason: Stock received, manual correction, damaged, used outside repair, etc.'); if(!reason?.trim()) return toast('A reason is required for the stock audit trail.','error')
-  const {error}=await supabase.rpc('adjust_part_stock_v212',{p_part_id:id,p_change:change,p_reason:reason.trim()}); if(error) return toast(`Stock was not adjusted: ${error.message}`,'error')
+  const {error}=await supabase.rpc('adjust_part_stock_v22',{p_part_id:id,p_change:change,p_reason:reason.trim()}); if(error) return toast(`Stock was not adjusted: ${error.message}`,'error')
   await loadData(); renderParts(); toast('Stock adjusted and audit trail recorded.','success')
 }
 
@@ -835,12 +842,15 @@ async function addRepair(assetId = null) {
   if (button) { button.disabled = true; button.textContent = 'Reporting…' }
   let saved = false
   try {
-    const payload = {
-      asset_id: selectedAsset, title, description: value('#repairDesc'), reported_by: reportedBy,
-      priority: value('#repairPriority') || 'Medium', status: 'Open',
-      photo_url: await uploadRepairPhoto()
-    }
-    const { error } = await supabase.from('repair_tickets').insert(payload)
+    const photoUrl = await uploadRepairPhoto()
+    const { error } = await supabase.rpc('report_fault_v22', {
+      p_asset_id: selectedAsset,
+      p_title: title,
+      p_description: value('#repairDesc'),
+      p_reported_by: reportedBy,
+      p_priority: value('#repairPriority') || 'Medium',
+      p_photo_url: photoUrl
+    })
     if (error) throw new Error(error.message)
     saved = true
     // Database trigger updates asset status in the same transaction as the fault.
@@ -1069,7 +1079,7 @@ async function renderQR() {
 
   const grid = document.querySelector('#qrGrid')
   for (const a of assets) {
-    const url = `${location.origin}${location.pathname}?asset=${encodeURIComponent(a.id)}`
+    const url = assetDeepLink(a.id)
     const qr = await QRCode.toDataURL(url, { margin: 1, width: 360 })
     grid.innerHTML += `
       <div class="qr-card">

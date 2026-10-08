@@ -1,0 +1,25 @@
+MaintenanceOS V22.0 — Installation
+
+1. Back up the current Supabase database before changing production.
+2. Open the Supabase project → SQL Editor.
+3. Run DB-V22-STABILITY-HARDENING.sql in full.
+4. Confirm it completes without an error.
+5. In the MaintenanceOS project folder run:
+   npm install
+   npm run build
+6. If the build succeeds:
+   git add .
+   git commit -m "MaintenanceOS V22.0 stability hardening"
+   git push origin main
+7. Allow Vercel to deploy the new main branch.
+8. Hard-refresh the live app (Ctrl+F5).
+
+Verification:
+- Test an old QR URL using ?asset=<uuid>.
+- Generate a new QR URL and confirm it uses #asset/<uuid>.
+- Scan the QR and confirm the full sidebar/navigation is present.
+- Report a test fault and confirm it is created.
+- Adjust a part stock level and confirm the quantity and stock adjustment history change.
+- Edit an asset location/name and confirm the change appears in Asset History Timeline.
+- Open Part Intelligence and confirm Usage Spend stays inside its tile.
+- Complete a test repair using an inventory part and confirm stock decreases and usage history records the consumption.
