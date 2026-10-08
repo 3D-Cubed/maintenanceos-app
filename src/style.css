@@ -1152,3 +1152,12 @@ a.part-link:hover{
 .part-actions .part-link::before,.part-actions a.part-link::before{content:"↗";font-size:.8rem;margin-right:6px;color:#55efd2}
 .part-actions .part-link:hover,.part-actions a.part-link:hover{color:#fff!important;border-color:rgba(91,250,220,.65)!important;background:linear-gradient(135deg,rgba(24,222,180,.26),rgba(60,169,230,.16))!important;box-shadow:0 0 22px rgba(28,222,184,.11)}
 @media(max-width:600px){.part-card{grid-template-columns:112px minmax(0,1fr);min-height:235px}.part-image,.part-image.placeholder{width:112px;min-height:211px;padding:9px}.part-actions{gap:6px}.part-actions .ghost.compact,.part-actions a.ghost.compact{padding:7px 9px}}
+
+
+/* V21.5 maintenance fixes */
+.asset-edit-card{width:min(900px,calc(100vw - 32px));max-height:calc(100vh - 40px);overflow:auto}
+.asset-edit-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.history-list .data-row{align-items:flex-start;min-width:0}
+.history-list .data-row>div{min-width:0;flex:1}
+.history-list .data-row>span{flex:0 0 auto;white-space:nowrap;max-width:30%;text-align:right;font-weight:900;color:#e9fffb}
+@media(max-width:700px){.asset-edit-grid{grid-template-columns:1fr}.history-list .data-row{flex-direction:column}.history-list .data-row>span{max-width:100%;text-align:left}}

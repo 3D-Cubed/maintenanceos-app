@@ -1,0 +1,15 @@
+MAINTENANCEOS V21.5 INSTALLATION
+
+1. Run DB-V21.5-MAINTENANCE-FIXES.sql in Supabase SQL Editor.
+2. Confirm Supabase reports Success.
+3. Copy this release over the existing maintenanceos-app Git folder.
+4. Open CMD in the repository.
+5. Run: npm run build
+6. If successful, run:
+   git status
+   git add .
+   git commit -m "MaintenanceOS V21.5 operational fixes"
+   git push origin main
+7. Vercel should deploy automatically.
+
+No npm install is required unless package.json/package-lock.json changed or npm reports missing dependencies.

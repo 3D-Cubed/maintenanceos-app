@@ -416,7 +416,7 @@ async function renderAssetDetail(id) {
   const qr = await QRCode.toDataURL(qrUrl)
 
   content().innerHTML = `
-    ${renderHeader('ASSET RECORD', escapeHtml(a.name), `<button onclick="location.hash='assets'">Back</button><button class="primary" onclick="window.openServiceModal('${a.id}')">Service Asset</button><button class="danger subtle" onclick="window.archiveAsset('${a.id}', '${escapeHtml(a.name || 'this asset')}')">Archive Asset</button>`)}
+    ${renderHeader('ASSET RECORD', escapeHtml(a.name), `<button onclick="location.hash='assets'">Back</button><button class="ghost" onclick="window.openAssetEditModal('${a.id}')">Edit Asset</button><button class="primary" onclick="window.openServiceModal('${a.id}')">Service Asset</button><button class="danger subtle" onclick="window.archiveAsset('${a.id}', '${escapeHtml(a.name || 'this asset')}')">Archive Asset</button>`)}
     <section class="grid two">
       <div class="card">
         <h2>Equipment Details</h2>
@@ -930,6 +930,62 @@ function repairRow(r) {
   `
 }
 
+
+
+function openAssetEditModal(id) {
+  const a = assets.find(item => item.id === id)
+  if (!a) return toast('Asset not found.', 'error')
+  let modal = document.querySelector('#assetEditModal')
+  if (modal) modal.remove()
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="assetEditModal" class="resolve-modal">
+      <div class="resolve-backdrop" onclick="document.querySelector('#assetEditModal')?.remove()"></div>
+      <section class="resolve-card asset-edit-card" role="dialog" aria-modal="true">
+        <div class="resolve-head">
+          <div><p class="eyebrow">ASSET CONTROL</p><h2>Edit Asset</h2><p class="muted">Update the equipment record without creating a new asset.</p></div>
+          <button class="icon-btn" onclick="document.querySelector('#assetEditModal')?.remove()">×</button>
+        </div>
+        <div class="form-grid asset-edit-grid">
+          <label class="field-label">Asset name<input id="editAssetName" value="${escapeHtml(a.name || '')}" /></label>
+          <label class="field-label">Equipment type<input id="editAssetType" list="editAssetTypeOptions" value="${escapeHtml(a.type || '')}" /></label>
+          <datalist id="editAssetTypeOptions"><option value="AGV"><option value="FDM 3D Printer"><option value="Resin Printer"><option value="Wash & Cure Station"><option value="General Equipment"></datalist>
+          <label class="field-label">Serial number<input id="editAssetSerial" value="${escapeHtml(a.serial_number || '')}" /></label>
+          <label class="field-label">Location<input id="editAssetLocation" placeholder="e.g. R&D" value="${escapeHtml(a.location || '')}" /></label>
+          <label class="field-label">Manufacturer<input id="editAssetManufacturer" value="${escapeHtml(a.manufacturer || '')}" /></label>
+          <label class="field-label">Model<input id="editAssetModel" value="${escapeHtml(a.model || '')}" /></label>
+          <label class="field-label">Status<select id="editAssetStatus">${statusOptions.map(o => `<option ${o === (a.status || 'Operational') ? 'selected' : ''}>${o}</option>`).join('')}</select></label>
+          <label class="field-label">Next service<input id="editAssetService" type="date" value="${escapeHtml(a.next_service_date || '')}" /></label>
+        </div>
+        <label class="field-label">Notes<textarea id="editAssetNotes">${escapeHtml(a.notes || '')}</textarea></label>
+        <div class="resolve-actions"><button class="ghost" onclick="document.querySelector('#assetEditModal')?.remove()">Cancel</button><button class="primary" onclick="window.saveAssetEdit('${a.id}')">Save Asset Changes</button></div>
+      </section>
+    </div>`)
+}
+
+window.openAssetEditModal = openAssetEditModal
+window.saveAssetEdit = async id => {
+  const name = value('#editAssetName')
+  if (!name) return toast('Asset name is required.', 'error')
+  const payload = {
+    name,
+    type: value('#editAssetType'),
+    serial_number: value('#editAssetSerial'),
+    location: value('#editAssetLocation'),
+    manufacturer: value('#editAssetManufacturer'),
+    model: value('#editAssetModel'),
+    status: value('#editAssetStatus') || 'Operational',
+    next_service_date: value('#editAssetService') || null,
+    notes: value('#editAssetNotes')
+  }
+  const { error } = await supabase.from('assets').update(payload).eq('id', id)
+  if (error) return toast(`Asset could not be updated: ${error.message}`, 'error')
+  await audit('asset_updated', 'assets', name)
+  document.querySelector('#assetEditModal')?.remove()
+  await loadData()
+  if (location.hash.startsWith('#asset/')) await renderAssetDetail(id)
+  else renderAssets()
+  toast('Asset record updated.', 'success')
+}
 
 async function archiveAsset(assetId, assetName = 'this asset') {
   const confirmed = confirm(`Archive ${assetName}?\n\nThis removes it from the active asset list but keeps repair history for reporting.`)
