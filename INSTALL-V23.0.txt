@@ -1,0 +1,20 @@
+MaintenanceOS V23.0 — Installation
+
+1. Extract this release over your working MaintenanceOS project.
+2. Supabase SQL Editor: run DB-V23-PARTS-SERVICE-OVERHAUL.sql.
+3. Confirm the SQL completes successfully.
+4. In CMD from the project folder:
+   npm install
+   npm run build
+5. If the build succeeds:
+   git add .
+   git commit -m "MaintenanceOS V23.0 Parts and Service Overhaul"
+   git push origin main
+6. Allow Vercel to deploy.
+
+Test:
+- Parts > open a part > Edit Part; change supplier and save.
+- Archive and restore a test part.
+- Add a PDF drawing and confirm Engineering Drawing opens.
+- Complete a service and add an in-stock part. Confirm the service shows the calculated parts cost, stock decreases and usage history records the service consumption.
+- Confirm repair/fault and QR workflows remain operational.

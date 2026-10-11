@@ -12,7 +12,10 @@ let partsInventory = []
 let partsUsage = []
 let stockMovements = []
 let assetHistory = []
+let partsHistory = []
+let serviceRecords = []
 let selectedRepairParts = []
+let selectedServiceParts = []
 let activePage = 'dashboard'
 let resolveContext = null
 let resolvingTicket = false
@@ -186,14 +189,16 @@ function renderAuth() {
 
 async function loadData() {
   try {
-    const [assetResult, repairResult, maintenanceResult, partsResult, usageResult, movementResult, assetHistoryResult] = await Promise.all([
+    const [assetResult, repairResult, maintenanceResult, partsResult, usageResult, movementResult, assetHistoryResult, partsHistoryResult, serviceRecordsResult] = await Promise.all([
       supabase.from('assets').select('*').or('archived.is.null,archived.eq.false').order('created_at', { ascending: false }),
       supabase.from('repair_tickets').select('*').order('created_at', { ascending: false }),
       supabase.from('maintenance_tasks').select('*').order('due_date', { ascending: true }),
       supabase.from('parts_inventory').select('*').order('part_name', { ascending: true }),
       supabase.from('parts_usage').select('*').order('created_at', { ascending: false }),
       supabase.from('parts_stock_movements').select('*').order('created_at', { ascending: false }),
-      supabase.from('asset_history').select('*').order('created_at', { ascending: false })
+      supabase.from('asset_history').select('*').order('created_at', { ascending: false }),
+      supabase.from('parts_history').select('*').order('created_at', { ascending: false }),
+      supabase.from('service_records').select('*').order('completed_at', { ascending: false })
     ])
 
     if (assetResult.error) console.warn(assetResult.error.message)
@@ -203,6 +208,8 @@ async function loadData() {
     if (usageResult.error && !usageResult.error.message.includes('parts_usage')) console.warn(usageResult.error.message)
     if (movementResult.error && !movementResult.error.message.includes('parts_stock_movements')) console.warn(movementResult.error.message)
     if (assetHistoryResult.error && !assetHistoryResult.error.message.includes('asset_history')) console.warn(assetHistoryResult.error.message)
+    if (partsHistoryResult.error && !partsHistoryResult.error.message.includes('parts_history')) console.warn(partsHistoryResult.error.message)
+    if (serviceRecordsResult.error && !serviceRecordsResult.error.message.includes('service_records')) console.warn(serviceRecordsResult.error.message)
 
     assets = assetResult.data || []
     repairs = repairResult.data || []
@@ -211,6 +218,8 @@ async function loadData() {
     partsUsage = usageResult.data || []
     stockMovements = movementResult.data || []
     assetHistory = assetHistoryResult.data || []
+    partsHistory = partsHistoryResult.data || []
+    serviceRecords = serviceRecordsResult.data || []
   } catch (err) {
     console.warn('Data load skipped:', err?.message || err)
     assets = []
@@ -724,24 +733,33 @@ function addSelectedRepairPart() {
 }
 window.removeRepairPart = index => { selectedRepairParts.splice(index, 1); renderRepairPartPicker() }
 
-function openPartModal(selectAfterSave = false) {
+function openPartModal(selectAfterSave = false, partId = null) {
   ensurePartModal()
   const modal = document.querySelector('#partModal')
+  const part = partId ? partsInventory.find(p => p.id === partId) : null
   modal.dataset.selectAfterSave = selectAfterSave ? 'true' : 'false'
-  ;['partNumber','partName','partCategory','partSupplierName','partSupplierUrl','partLocation','partNotes','partImageUrl'].forEach(id => { const el=document.querySelector(`#${id}`); if(el) el.value='' })
-  document.querySelector('#partEquipment').value = 'General'
-  document.querySelector('#partUnitCost').value = '0'
-  document.querySelector('#partStock').value = '0'
-  document.querySelector('#partMinimum').value = '0'
+  modal.dataset.editPartId = part?.id || ''
+  document.querySelector('#partModalTitle').textContent = part ? 'Edit Part' : 'Add New Part'
+  document.querySelector('#partModalEyebrow').textContent = part ? 'PARTS MASTER RECORD' : 'PARTS INVENTORY'
+  document.querySelector('#partModalDescription').textContent = part ? 'Update the controlled part record without creating a duplicate.' : 'The same inventory record is used on future repairs and services.'
+  ;['partNumber','partName','partCategory','partSupplierName','partSupplierUrl','partLocation','partNotes','partImageUrl','partDrawingNumber','partDrawingRevision'].forEach(id => { const el=document.querySelector(`#${id}`); if(el) el.value=part?.[id==='partNumber'?'part_number':id==='partName'?'part_name':id==='partCategory'?'category':id==='partSupplierName'?'supplier_name':id==='partSupplierUrl'?'supplier_url':id==='partLocation'?'stock_location':id==='partNotes'?'notes':id==='partImageUrl'?'image_url':id==='partDrawingNumber'?'drawing_number':'drawing_revision'] || '' })
+  document.querySelector('#partEquipment').value = part?.equipment_type || 'General'
+  document.querySelector('#partUnitCost').value = Number(part?.price || 0)
+  document.querySelector('#partStock').value = Number(part?.quantity_in_stock || 0)
+  document.querySelector('#partMinimum').value = Number(part?.minimum_stock_level || 0)
   document.querySelector('#partImageFile').value = ''
+  document.querySelector('#partDrawingFile').value = ''
+  const drawingStatus=document.querySelector('#partDrawingStatus'); if(drawingStatus) drawingStatus.textContent=part?.drawing_url ? `Current drawing: ${part.drawing_number || 'PDF'}${part.drawing_revision ? ` • Rev ${part.drawing_revision}`:''}` : 'No engineering drawing attached.'
+  const archiveBtn=document.querySelector('#archivePart'); if(archiveBtn){ archiveBtn.classList.toggle('hidden', !part); archiveBtn.textContent=part?.archived ? 'Restore Part' : 'Archive Part' }
+  document.querySelector('#savePart').textContent = part ? 'Save Part Changes' : 'Add Part'
   modal.hidden = false; modal.classList.remove('hidden')
   document.querySelector('#partName').focus()
 }
 function closePartModal() { const m=document.querySelector('#partModal'); if(m){m.hidden=true;m.classList.add('hidden')} }
 function ensurePartModal() {
   if (document.querySelector('#partModal')) return
-  document.body.insertAdjacentHTML('beforeend', `<div id="partModal" class="resolve-modal hidden" hidden><div class="resolve-backdrop" data-close-part></div><section class="resolve-card part-form-card" role="dialog" aria-modal="true"><div class="resolve-head"><div><p class="eyebrow">PARTS INVENTORY</p><h2>Add New Part</h2><p class="muted">The same inventory record is used on future repairs.</p></div><button id="closePart" class="icon-btn">×</button></div><div class="form-grid"><label class="field-label">Part name<input id="partName" /></label><label class="field-label">Part number<input id="partNumber" /></label><label class="field-label">Equipment type<select id="partEquipment"><option>General</option><option>AGV</option><option>3D Printer</option></select></label><label class="field-label">Category<input id="partCategory" placeholder="e.g. Electrical, Motion, Consumable" /></label><label class="field-label">Supplier<input id="partSupplierName" /></label><label class="field-label">Supplier / product URL<input id="partSupplierUrl" type="url" placeholder="https://..." /></label><label class="field-label">Unit cost (£)<input id="partUnitCost" type="number" min="0" step="0.01" value="0" /></label><label class="field-label">Current stock<input id="partStock" type="number" min="0" step="1" value="0" /></label><label class="field-label">Minimum stock<input id="partMinimum" type="number" min="0" step="1" value="0" /></label><label class="field-label">Storage location<input id="partLocation" /></label><label class="field-label">Part image<input id="partImageFile" type="file" accept="image/*" /></label><label class="field-label">Or image URL<input id="partImageUrl" type="url" placeholder="https://..." /></label></div><label class="field-label">Notes<textarea id="partNotes"></textarea></label><div class="resolve-actions"><button id="cancelPart" class="ghost">Cancel</button><button id="savePart" class="primary">Add Part</button></div></section></div>`)
-  document.querySelector('#closePart').onclick=closePartModal; document.querySelector('#cancelPart').onclick=closePartModal; document.querySelector('[data-close-part]').onclick=closePartModal; document.querySelector('#savePart').onclick=saveNewPart
+  document.body.insertAdjacentHTML('beforeend', `<div id="partModal" class="resolve-modal hidden" hidden><div class="resolve-backdrop" data-close-part></div><section class="resolve-card part-form-card" role="dialog" aria-modal="true"><div class="resolve-head"><div><p id="partModalEyebrow" class="eyebrow">PARTS INVENTORY</p><h2 id="partModalTitle">Add New Part</h2><p id="partModalDescription" class="muted">The same inventory record is used on future repairs and services.</p></div><button id="closePart" class="icon-btn">×</button></div><div class="form-grid"><label class="field-label">Part name<input id="partName" /></label><label class="field-label">Part number<input id="partNumber" /></label><label class="field-label">Equipment type<select id="partEquipment"><option>General</option><option>AGV</option><option>3D Printer</option></select></label><label class="field-label">Category<input id="partCategory" placeholder="e.g. Electrical, Motion, Consumable" /></label><label class="field-label">Supplier<input id="partSupplierName" /></label><label class="field-label">Supplier / product URL<input id="partSupplierUrl" type="url" placeholder="https://..." /></label><label class="field-label">Unit cost (£)<input id="partUnitCost" type="number" min="0" step="0.01" value="0" /></label><label class="field-label">Current stock<input id="partStock" type="number" min="0" step="1" value="0" /></label><label class="field-label">Minimum stock<input id="partMinimum" type="number" min="0" step="1" value="0" /></label><label class="field-label">Storage location<input id="partLocation" /></label><label class="field-label">Part image<input id="partImageFile" type="file" accept="image/*" /></label><label class="field-label">Or image URL<input id="partImageUrl" type="url" placeholder="https://..." /></label></div><section class="part-document-panel"><div><span class="eyebrow">TECHNICAL DOCUMENTATION</span><h3>Engineering drawing</h3><p id="partDrawingStatus" class="muted">No engineering drawing attached.</p></div><div class="form-grid"><label class="field-label">Drawing number<input id="partDrawingNumber" placeholder="e.g. AGV-BRKT-0042" /></label><label class="field-label">Revision<input id="partDrawingRevision" placeholder="e.g. C" /></label><label class="field-label">Drawing PDF<input id="partDrawingFile" type="file" accept="application/pdf,.pdf" /></label></div></section><label class="field-label">Notes<textarea id="partNotes"></textarea></label><div class="resolve-actions"><button id="archivePart" class="ghost hidden">Archive Part</button><span></span><button id="cancelPart" class="ghost">Cancel</button><button id="savePart" class="primary">Add Part</button></div></section></div>`)
+  document.querySelector('#closePart').onclick=closePartModal; document.querySelector('#cancelPart').onclick=closePartModal; document.querySelector('[data-close-part]').onclick=closePartModal; document.querySelector('#savePart').onclick=savePart; document.querySelector('#archivePart').onclick=togglePartArchive
 }
 async function uploadPartImage() {
   const file=document.querySelector('#partImageFile')?.files?.[0]
@@ -752,43 +770,68 @@ async function uploadPartImage() {
   if(error) throw new Error(`Part image upload failed: ${error.message}`)
   return supabase.storage.from('part-images').getPublicUrl(path).data?.publicUrl || null
 }
-async function saveNewPart() {
+async function uploadPartDrawing() {
+  const file=document.querySelector('#partDrawingFile')?.files?.[0]
+  if(!file) return null
+  if(file.type && file.type !== 'application/pdf') throw new Error('Engineering drawing must be a PDF.')
+  const safe=file.name.replace(/[^a-z0-9.\-_]/gi,'_')
+  const path=`${Date.now()}-${safe}`
+  const {error}=await supabase.storage.from('part-drawings').upload(path,file,{upsert:false,contentType:'application/pdf'})
+  if(error) throw new Error(`Drawing upload failed: ${error.message}`)
+  return supabase.storage.from('part-drawings').getPublicUrl(path).data?.publicUrl || null
+}
+async function savePart() {
   const name=value('#partName'); if(!name) return toast('Part name is required.','error')
   const stock=Number(value('#partStock')||0), minimum=Number(value('#partMinimum')||0), unitCost=Number(value('#partUnitCost')||0)
   if (![stock,minimum].every(Number.isInteger) || stock<0 || minimum<0 || !Number.isFinite(unitCost) || unitCost<0) return toast('Stock values must be whole numbers and cost must be zero or positive.','error')
-  const selectAfter=document.querySelector('#partModal')?.dataset.selectAfterSave==='true'
-  let imageUrl=null
-  try { imageUrl=await uploadPartImage() } catch(err) { return toast(err.message,'error') }
-  const payload={part_name:name,part_number:value('#partNumber')||null,equipment_type:value('#partEquipment')||'General',category:value('#partCategory')||null,image_url:imageUrl,price:unitCost,supplier_name:value('#partSupplierName')||null,supplier_url:value('#partSupplierUrl')||null,quantity_in_stock:stock + (selectAfter ? 1 : 0),minimum_stock_level:minimum,stock_location:value('#partLocation')||null,notes:value('#partNotes')||null}
-  const {data,error}=await supabase.from('parts_inventory').insert(payload).select().single(); if(error) return toast(`Part was not added: ${error.message}`,'error')
-  partsInventory.push(data); partsInventory.sort((a,b)=>(a.part_name||'').localeCompare(b.part_name||''))
+  const modal=document.querySelector('#partModal'), editId=modal?.dataset.editPartId || '', selectAfter=modal?.dataset.selectAfterSave==='true'
+  const existing=editId ? partsInventory.find(p=>p.id===editId) : null
+  let imageUrl=existing?.image_url || null, drawingUrl=existing?.drawing_url || null
+  try { imageUrl=await uploadPartImage() || imageUrl; drawingUrl=await uploadPartDrawing() || drawingUrl } catch(err) { return toast(err.message,'error') }
+  const payload={part_name:name,part_number:value('#partNumber')||null,equipment_type:value('#partEquipment')||'General',category:value('#partCategory')||null,image_url:imageUrl,price:unitCost,supplier_name:value('#partSupplierName')||null,supplier_url:value('#partSupplierUrl')||null,quantity_in_stock:stock,minimum_stock_level:minimum,stock_location:value('#partLocation')||null,notes:value('#partNotes')||null,drawing_url:drawingUrl,drawing_number:value('#partDrawingNumber')||null,drawing_revision:value('#partDrawingRevision')||null,updated_at:new Date().toISOString()}
+  let data,error
+  if(editId) ({data,error}=await supabase.from('parts_inventory').update(payload).eq('id',editId).select().single())
+  else { payload.quantity_in_stock=stock + (selectAfter ? 1 : 0); ({data,error}=await supabase.from('parts_inventory').insert(payload).select().single()) }
+  if(error) return toast(`Part could not be saved: ${error.message}`,'error')
+  const idx=partsInventory.findIndex(p=>p.id===data.id); if(idx>=0) partsInventory[idx]=data; else partsInventory.push(data)
+  partsInventory.sort((a,b)=>(a.part_name||'').localeCompare(b.part_name||''))
   closePartModal()
-  if(selectAfter){ selectedRepairParts.push({...data,quantity:1}); renderRepairPartPicker(); toast('Part added to inventory and selected for this repair.','success') }
-  else { renderParts(); toast('Part added to inventory.','success') }
+  if(selectAfter && !editId){ selectedRepairParts.push({...data,quantity:1}); renderRepairPartPicker(); toast('Part added to inventory and selected for this repair.','success') }
+  else { renderParts(); toast(editId?'Part record updated.':'Part added to inventory.','success') }
+}
+async function togglePartArchive() {
+  const modal=document.querySelector('#partModal'), id=modal?.dataset.editPartId, p=partsInventory.find(x=>x.id===id); if(!p) return
+  const archived=!p.archived
+  const {data,error}=await supabase.from('parts_inventory').update({archived,archived_at:archived?new Date().toISOString():null,updated_at:new Date().toISOString()}).eq('id',id).select().single()
+  if(error) return toast(`Part could not be ${archived?'archived':'restored'}: ${error.message}`,'error')
+  const idx=partsInventory.findIndex(x=>x.id===id); if(idx>=0) partsInventory[idx]=data
+  closePartModal(); renderParts(); toast(archived?'Part archived.':'Part restored.','success')
 }
 
 function renderParts() {
   const equipment = document.querySelector('#partsEquipmentFilter')?.value || 'All'
   const stock = document.querySelector('#partsStockFilter')?.value || 'All'
   const category = document.querySelector('#partsCategoryFilter')?.value || 'All'
+  const lifecycle = document.querySelector('#partsLifecycleFilter')?.value || 'Active'
   const search = (document.querySelector('#partsSearch')?.value || '').trim().toLowerCase()
   const categories=[...new Set(partsInventory.map(p=>p.category).filter(Boolean))].sort()
   const filtered=partsInventory.filter(p=>{
     const min=Number(p.minimum_stock_level||0), qty=Number(p.quantity_in_stock||0)
     const hay=[p.part_name,p.part_number,p.category,p.supplier_name,p.stock_location,p.notes].filter(Boolean).join(' ').toLowerCase()
-    return (equipment==='All'||(p.equipment_type||'General')===equipment) && (category==='All'||p.category===category) && (stock==='All'||(stock==='Low'&&qty<=min)||(stock==='In Stock'&&qty>min)) && (!search||hay.includes(search))
+    return (lifecycle==='All'||(lifecycle==='Active'&&!p.archived)||(lifecycle==='Archived'&&p.archived)) && (equipment==='All'||(p.equipment_type||'General')===equipment) && (category==='All'||p.category===category) && (stock==='All'||(stock==='Low'&&qty<=min)||(stock==='In Stock'&&qty>min)) && (!search||hay.includes(search))
   })
+  const lifecycleCount=partsInventory.filter(p=>p.archived).length
   const low=partsInventory.filter(p=>Number(p.quantity_in_stock||0)<=Number(p.minimum_stock_level||0)).length
-  content().innerHTML = `${renderHeader('STOCK CONTROL','Parts', '<button class="primary" id="newInventoryPart">Add New Part</button>')}<section class="stats-grid">${statCard('Inventory Parts',partsInventory.length,'Reusable maintenance catalogue')}${statCard('Low Stock',low,'At or below minimum')}</section><section class="card parts-control-card"><div class="parts-toolbar"><input id="partsSearch" placeholder="Search parts, number, category, location…" value="${escapeHtml(search)}"/><select id="partsEquipmentFilter"><option>All</option><option>AGV</option><option>3D Printer</option><option>General</option></select><select id="partsStockFilter"><option>All</option><option>In Stock</option><option>Low</option></select><select id="partsCategoryFilter"><option>All</option>${categories.map(c=>`<option>${escapeHtml(c)}</option>`).join('')}</select></div></section><section class="card"><div class="section-heading"><div><h2>Parts Inventory</h2><p class="muted">${filtered.length} of ${partsInventory.length} parts shown</p></div></div><div class="parts-grid">${filtered.map(p=>partCard(p)).join('')||'<p class="muted">No parts match these filters.</p>'}</div></section>`
+  content().innerHTML = `${renderHeader('STOCK CONTROL','Parts', '<button class="primary" id="newInventoryPart">Add New Part</button>')}<section class="stats-grid">${statCard('Inventory Parts',partsInventory.length,'Reusable maintenance catalogue')}${statCard('Low Stock',low,'At or below minimum')}</section><section class="card parts-control-card"><div class="parts-toolbar"><input id="partsSearch" placeholder="Search parts, number, category, location…" value="${escapeHtml(search)}"/><select id="partsEquipmentFilter"><option>All</option><option>AGV</option><option>3D Printer</option><option>General</option></select><select id="partsStockFilter"><option>All</option><option>In Stock</option><option>Low</option></select><select id="partsLifecycleFilter"><option>Active</option><option>Archived</option><option>All</option></select><select id="partsCategoryFilter"><option>All</option>${categories.map(c=>`<option>${escapeHtml(c)}</option>`).join('')}</select></div></section><section class="card"><div class="section-heading"><div><h2>Parts Inventory</h2><p class="muted">${filtered.length} of ${partsInventory.length} parts shown • ${lifecycleCount} archived</p></div></div><div class="parts-grid">${filtered.map(p=>partCard(p)).join('')||'<p class="muted">No parts match these filters.</p>'}</div></section>`
   document.querySelector('#newInventoryPart').onclick=()=>openPartModal(false)
-  const eq=document.querySelector('#partsEquipmentFilter'), st=document.querySelector('#partsStockFilter'), cat=document.querySelector('#partsCategoryFilter'), q=document.querySelector('#partsSearch')
-  eq.value=equipment; st.value=stock; cat.value=category
-  ;[eq,st,cat].forEach(el=>el.onchange=renderParts); q.oninput=()=>{ clearTimeout(window.__partsSearchTimer); window.__partsSearchTimer=setTimeout(renderParts,180) }
+  const eq=document.querySelector('#partsEquipmentFilter'), st=document.querySelector('#partsStockFilter'), life=document.querySelector('#partsLifecycleFilter'), cat=document.querySelector('#partsCategoryFilter'), q=document.querySelector('#partsSearch')
+  eq.value=equipment; st.value=stock; life.value=lifecycle; cat.value=category
+  ;[eq,st,life,cat].forEach(el=>el.onchange=renderParts); q.oninput=()=>{ clearTimeout(window.__partsSearchTimer); window.__partsSearchTimer=setTimeout(renderParts,180) }
 }
 function partCard(p) {
   const qty=Number(p.quantity_in_stock||0), min=Number(p.minimum_stock_level||0), low=qty<=min
   const img=p.image_url ? `<img class="part-image" src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.part_name||'Part')}"/>` : `<div class="part-image placeholder">PART</div>`
-  return `<article class="part-card">${img}<div class="part-card-body"><div class="part-card-head"><div><span class="part-equipment">${escapeHtml(p.equipment_type||'General')}</span><h3>${escapeHtml(p.part_name||'Unnamed part')}</h3><p>${escapeHtml(p.part_number||'No part number')} • ${escapeHtml(p.category||'Uncategorised')}</p></div><div class="stock-count ${low?'low':''}"><b>${qty}</b><small>in stock</small></div></div><div class="part-meta"><span>Min: ${min}</span><span>${escapeHtml(p.stock_location||'No location')}</span><span>£${Number(p.price||0).toFixed(2)} each</span></div>${p.supplier_name?`<small>${escapeHtml(p.supplier_name)}</small>`:''}${p.notes?`<p class="part-notes">${escapeHtml(p.notes)}</p>`:''}<div class="part-actions"><button class="ghost compact" onclick="window.openPartDetail('${p.id}')">View history</button><button class="ghost compact" onclick="window.adjustPartStock('${p.id}')">Adjust stock</button>${p.supplier_url?`<a class="ghost compact part-link" href="${escapeHtml(p.supplier_url)}" target="_blank" rel="noopener">Supplier</a>`:''}</div></div></article>`
+  return `<article class="part-card ${p.archived?'part-archived':''}">${img}<div class="part-card-body"><div class="part-card-head"><div><span class="part-equipment">${escapeHtml(p.equipment_type||'General')}</span><h3>${escapeHtml(p.part_name||'Unnamed part')}</h3><p>${escapeHtml(p.part_number||'No part number')} • ${escapeHtml(p.category||'Uncategorised')}</p></div><div class="stock-count ${low?'low':''}"><b>${qty}</b><small>in stock</small></div></div><div class="part-meta"><span>Min: ${min}</span><span>${escapeHtml(p.stock_location||'No location')}</span><span>£${Number(p.price||0).toFixed(2)} each</span></div>${p.supplier_name?`<small>${escapeHtml(p.supplier_name)}</small>`:''}${p.notes?`<p class="part-notes">${escapeHtml(p.notes)}</p>`:''}<div class="part-actions"><button class="ghost compact" onclick="window.openPartDetail('${p.id}')">View history</button><button class="ghost compact" onclick="window.editPart('${p.id}')">Edit</button>${p.drawing_url?`<a class="ghost compact part-link" href="${escapeHtml(p.drawing_url)}" target="_blank" rel="noopener">Drawing</a>`:''}<button class="ghost compact" onclick="window.adjustPartStock('${p.id}')">Adjust stock</button>${p.supplier_url?`<a class="ghost compact part-link" href="${escapeHtml(p.supplier_url)}" target="_blank" rel="noopener">Supplier</a>`:''}</div></div></article>`
 }
 
 
@@ -809,6 +852,7 @@ function getRepeatFailureSignals() {
     return {assetId,assetName:assets.find(a=>a.id===assetId)?.name||'Unknown asset',label,count:arr.length,days:Math.max(1,Math.round((dates.at(-1)-dates[0])/86400000))}
   }).sort((a,b)=>b.count-a.count)
 }
+window.editPart = id => { openPartModal(false, id) }
 window.openPartDetail = id => {
   const p=partsInventory.find(x=>x.id===id); if(!p) return
   const usage=partsUsage.filter(x=>x.part_id===id); const moves=stockMovements.filter(x=>x.part_id===id)
@@ -816,7 +860,7 @@ window.openPartDetail = id => {
   const spend=usage.reduce((n,x)=>n+Number(x.quantity_used||x.quantity||0)*Number(x.unit_cost_snapshot||x.unit_cost||p.price||0),0)
   const assetNames=[...new Set(usage.map(x=>assets.find(a=>a.id===x.asset_id)?.name).filter(Boolean))]
   let m=document.querySelector('#partDetailModal'); if(m) m.remove()
-  document.body.insertAdjacentHTML('beforeend',`<div id="partDetailModal" class="resolve-modal"><div class="resolve-backdrop" onclick="document.querySelector('#partDetailModal').remove()"></div><section class="resolve-card part-detail-card"><div class="resolve-head"><div><p class="eyebrow">PART INTELLIGENCE</p><h2>${escapeHtml(p.part_name||'Part')}</h2><p class="muted">${escapeHtml(p.part_number||'No part number')} • ${escapeHtml(p.equipment_type||'General')}</p></div><button class="icon-btn" onclick="document.querySelector('#partDetailModal').remove()">×</button></div>${p.image_url?`<img class="part-detail-image" src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.part_name||'Part')}"/>`:''}<section class="stats-grid compact-stats">${statCard('In Stock',Number(p.quantity_in_stock||0),'Current quantity')}${statCard('Total Used',totalUsed,'Recorded consumption')}${statCard('Usage Spend',`£${spend.toFixed(2)}`,'Snapshotted component cost','stat-cost')}${statCard('Assets',assetNames.length,assetNames.slice(0,2).join(', ')||'No usage yet')}</section><h3>Usage history</h3><div class="history-list">${usage.slice(0,20).map(u=>`<div class="data-row"><div><b>${escapeHtml(u.part_name_snapshot||p.part_name||'Part')} × ${Number(u.quantity_used||u.quantity||0)}</b><p>${escapeHtml(assets.find(a=>a.id===u.asset_id)?.name||'Unknown asset')} • ${new Date(u.created_at).toLocaleDateString()}</p></div><span>£${(Number(u.unit_cost_snapshot||u.unit_cost||p.price||0)*Number(u.quantity_used||u.quantity||0)).toFixed(2)}</span></div>`).join('')||'<p class="muted">No recorded repair usage yet.</p>'}</div><h3>Stock adjustments</h3><div class="history-list">${moves.slice(0,20).map(x=>`<div class="data-row"><div><b>${Number(x.quantity_change)>0?'+':''}${Number(x.quantity_change)} • ${escapeHtml(x.reason||'Adjustment')}</b><p>${new Date(x.created_at).toLocaleString()}</p></div></div>`).join('')||'<p class="muted">No manual adjustments yet.</p>'}</div></section></div>`)
+  document.body.insertAdjacentHTML('beforeend',`<div id="partDetailModal" class="resolve-modal"><div class="resolve-backdrop" onclick="document.querySelector('#partDetailModal').remove()"></div><section class="resolve-card part-detail-card"><div class="resolve-head"><div><p class="eyebrow">PART INTELLIGENCE</p><h2>${escapeHtml(p.part_name||'Part')}</h2><p class="muted">${escapeHtml(p.part_number||'No part number')} • ${escapeHtml(p.equipment_type||'General')}</p></div><div class="part-detail-actions"><button class="ghost compact" onclick="window.editPart('${p.id}')">Edit Part</button>${p.drawing_url?`<a class="ghost compact part-link" href="${escapeHtml(p.drawing_url)}" target="_blank" rel="noopener">Engineering Drawing</a>`:''}</div><button class="icon-btn" onclick="document.querySelector('#partDetailModal').remove()">×</button></div>${p.image_url?`<img class="part-detail-image" src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.part_name||'Part')}"/>`:''}<section class="stats-grid compact-stats">${statCard('In Stock',Number(p.quantity_in_stock||0),'Current quantity')}${statCard('Total Used',totalUsed,'Recorded consumption')}${statCard('Usage Spend',`£${spend.toFixed(2)}`,'Snapshotted component cost','stat-cost')}${statCard('Assets',assetNames.length,assetNames.slice(0,2).join(', ')||'No usage yet')}</section>${p.drawing_url?`<section class="part-document-panel part-detail-document"><div><span class="eyebrow">TECHNICAL DOCUMENTATION</span><h3>Engineering drawing</h3><p class="muted">${escapeHtml(p.drawing_number||'Drawing')} ${p.drawing_revision?`• Rev ${escapeHtml(p.drawing_revision)}`:''}</p></div><a class="primary compact" href="${escapeHtml(p.drawing_url)}" target="_blank" rel="noopener">Open Drawing ↗</a></section>`:''}${partsHistory.filter(h=>h.part_id===id).length?`<h3>Part record history</h3><div class="history-list">${partsHistory.filter(h=>h.part_id===id).slice(0,20).map(h=>`<div class="data-row"><div><b>Part record updated</b><p>${escapeHtml(h.detail||'Record changed')} • ${new Date(h.created_at).toLocaleString()}</p></div></div>`).join('')}</div>`:''}<h3>Usage history</h3><div class="history-list">${usage.slice(0,20).map(u=>`<div class="data-row"><div><b>${escapeHtml(u.part_name_snapshot||p.part_name||'Part')} × ${Number(u.quantity_used||u.quantity||0)}</b><p>${escapeHtml(assets.find(a=>a.id===u.asset_id)?.name||'Unknown asset')} • ${new Date(u.created_at).toLocaleDateString()}</p></div><span>£${(Number(u.unit_cost_snapshot||u.unit_cost||p.price||0)*Number(u.quantity_used||u.quantity||0)).toFixed(2)}</span></div>`).join('')||'<p class="muted">No recorded repair usage yet.</p>'}</div><h3>Stock adjustments</h3><div class="history-list">${moves.slice(0,20).map(x=>`<div class="data-row"><div><b>${Number(x.quantity_change)>0?'+':''}${Number(x.quantity_change)} • ${escapeHtml(x.reason||'Adjustment')}</b><p>${new Date(x.created_at).toLocaleString()}</p></div></div>`).join('')||'<p class="muted">No manual adjustments yet.</p>'}</div></section></div>`)
 }
 window.adjustPartStock = async id => {
   const p=partsInventory.find(x=>x.id===id); if(!p) return
@@ -1416,7 +1460,7 @@ function ensureServiceModal() {
         <div id="serviceMessage" class="message hidden"></div>
         <div id="serviceFields" class="service-grid"></div>
         <div class="form-grid service-footer-grid">
-          <label class="field-label">Parts replaced<input id="servicePartsReplaced" placeholder="Parts replaced during service" /></label>
+          <div class="field-label repair-parts-field"><span>Parts used from inventory</span><div class="part-picker-row"><select id="servicePartSelect"></select><input id="servicePartQty" type="number" min="1" step="1" value="1" aria-label="Quantity" /><button id="addServicePart" type="button" class="ghost">Add</button></div><div id="selectedServiceParts" class="selected-parts"></div><small id="servicePartsCostHint" class="muted">Parts cost: £0.00</small></div><label class="field-label">Parts replaced / other notes<input id="servicePartsReplaced" placeholder="Parts replaced during service" /></label>
           <label class="field-label">Next service due<input id="serviceNextDue" type="date" /></label>
         </div>
         <label class="field-label">Engineer notes<textarea id="serviceEngineerNotes" placeholder="Overall findings, recommendations, outstanding risks or actions"></textarea></label>
@@ -1443,6 +1487,8 @@ function openServiceModal(assetId) {
   document.querySelector('#serviceWorkflowDescription').textContent = workflow.description
   document.querySelector('#serviceFields').innerHTML = workflow.fields.map(serviceFieldHtml).join('')
   document.querySelector('#servicePartsReplaced').value = ''
+  selectedServiceParts = []
+  renderServicePartPicker()
   document.querySelector('#serviceEngineerNotes').value = ''
   const defaultDue = new Date()
   defaultDue.setDate(defaultDue.getDate() + 90)
@@ -1457,6 +1503,7 @@ function openServiceModal(assetId) {
     toggle()
   })
 
+  document.querySelector('#addServicePart').onclick = addSelectedServicePart
   document.querySelector('#saveServiceRecord').onclick = () => saveServiceRecord(assetId)
   modal.classList.remove('hidden')
 }
@@ -1478,45 +1525,37 @@ function collectServiceData() {
   return checks
 }
 
+function renderServicePartPicker() {
+  const select=document.querySelector('#servicePartSelect'); if(!select) return
+  const asset=assets.find(a=>a.id===document.querySelector('#serviceModal')?.dataset.assetId)
+  const target=equipmentClassForAsset(asset)
+  const available=partsInventory.filter(p=>!p.archived && Number(p.quantity_in_stock||0)>0 && (!target || ['General',target].includes(p.equipment_type||'General')))
+  select.innerHTML=available.length?available.map(p=>`<option value="${p.id}">${escapeHtml(p.part_name||p.part_number||'Part')} • ${Number(p.quantity_in_stock||0)} in stock • £${Number(p.price||0).toFixed(2)}</option>`).join(''):'<option value="">No stocked parts available</option>'
+  const list=document.querySelector('#selectedServiceParts'); if(list) list.innerHTML=selectedServiceParts.length?selectedServiceParts.map((p,i)=>`<div class="selected-part"><span><b>${escapeHtml(p.part_name||p.part_number||'Part')}</b> × ${p.quantity} <small>£${(Number(p.price||0)*p.quantity).toFixed(2)}</small></span><button type="button" class="ghost compact" onclick="window.removeServicePart(${i})">Remove</button></div>`).join(''):'<small class="muted">No parts selected.</small>'
+  const total=selectedServiceParts.reduce((n,p)=>n+Number(p.price||0)*p.quantity,0); const hint=document.querySelector('#servicePartsCostHint'); if(hint) hint.textContent=`Parts cost: £${total.toFixed(2)}`
+}
+function addSelectedServicePart(){
+  const id=value('#servicePartSelect'), qty=Number(value('#servicePartQty')||1), part=partsInventory.find(p=>p.id===id); if(!part) return toast('Select an inventory part first.','error')
+  if(!Number.isInteger(qty)||qty<1) return toast('Enter a valid whole-number quantity.','error')
+  const existing=selectedServiceParts.find(p=>p.id===id), total=qty+(existing?.quantity||0); if(total>Number(part.quantity_in_stock||0)) return toast(`Only ${part.quantity_in_stock||0} in stock.`,'error')
+  if(existing) existing.quantity=total; else selectedServiceParts.push({...part,quantity:qty}); renderServicePartPicker()
+}
+window.removeServicePart=index=>{selectedServiceParts.splice(index,1);renderServicePartPicker()}
+
 async function saveServiceRecord(assetId) {
   const asset = assets.find(a => a.id === assetId)
   const workflowKey = document.querySelector('#serviceModal')?.dataset.workflowKey || workflowKeyForAsset(asset)
-  const nextDue = value('#serviceNextDue')
-  const partsReplaced = value('#servicePartsReplaced')
-  const engineerNotes = value('#serviceEngineerNotes')
-  const checks = collectServiceData()
-  const flagged = checks.filter(c => serviceOutcomeNeedsReason(c.value) && c.value)
-  const summary = {
-    asset: asset?.name || assetId,
-    workflow: workflowKey,
-    completed_at: new Date().toISOString(),
-    next_service_due: nextDue,
-    parts_replaced: partsReplaced,
-    engineer_notes: engineerNotes,
-    findings: checks,
-    flagged_findings: flagged
-  }
-
-  const { error } = await supabase
-    .from('assets')
-    .update({ status: flagged.length ? 'Needs Attention' : 'Operational', next_service_date: nextDue || null })
-    .eq('id', assetId)
-
-  if (error) {
-    const box = document.querySelector('#serviceMessage')
-    box.textContent = error.message
-    box.className = 'message error'
-    return
-  }
-
-  if (repairs.some(r => r.asset_id === assetId && r.status !== 'Resolved')) await updateAssetStatusFromRepairs(assetId)
-  await audit('asset_serviced', 'assets', JSON.stringify(summary))
-  toast('Service completed.', 'success')
-  closeServiceModal()
-  await loadData()
-  const hash = location.hash.replace('#', '')
-  if (hash.startsWith('asset/')) renderAssetDetail(assetId)
-  else renderMaintenance()
+  const nextDue = value('#serviceNextDue'), partsReplaced = value('#servicePartsReplaced'), engineerNotes = value('#serviceEngineerNotes')
+  const checks = collectServiceData(), flagged = checks.filter(c => serviceOutcomeNeedsReason(c.value) && c.value)
+  const parts = selectedServiceParts.map(item => ({ part_id:item.id, quantity:item.quantity }))
+  const partsCost = selectedServiceParts.reduce((n,p)=>n+Number(p.price||0)*p.quantity,0)
+  const totalCost = partsCost
+  const summary = { asset:asset?.name||assetId, workflow:workflowKey, completed_at:new Date().toISOString(), next_service_due:nextDue, parts_replaced:partsReplaced, engineer_notes:engineerNotes, findings:checks, flagged_findings:flagged }
+  const { data, error } = await supabase.rpc('complete_service_v23', { p_asset_id:assetId, p_service_category:workflowKey, p_service_data:summary, p_parts:parts, p_parts_replaced:partsReplaced, p_parts_cost:partsCost, p_total_cost:totalCost, p_next_service_due:nextDue||null, p_engineer_notes:engineerNotes||null })
+  if(error){ const box=document.querySelector('#serviceMessage'); box.textContent=error.message; box.className='message error'; return }
+  await audit('asset_serviced','service_records',data||assetId)
+  toast('Service completed and parts recorded.','success'); closeServiceModal(); await loadData()
+  const hash=location.hash.replace('#',''); if(hash.startsWith('asset/')) renderAssetDetail(assetId); else renderMaintenance()
 }
 
 async function markServiced(assetId) {
