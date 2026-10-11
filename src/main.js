@@ -1366,9 +1366,14 @@ function statusClass(status = 'Operational') {
 }
 
 function assetHistoryTimeline(asset, assetRepairs, assetServices = []) {
-  const editEvents = assetHistory.filter(h => h.asset_id === asset.id).map(h => ({
-    date: h.created_at, title: h.title || 'Asset updated', body: h.detail || 'Asset record updated', tone: 'created'
-  }))
+  // Service records are the canonical source for service timeline events.
+  // Do not also render legacy/service-generated asset_history rows or one service
+  // can appear twice after the V23 visibility backfill.
+  const editEvents = assetHistory
+    .filter(h => h.asset_id === asset.id && !String(h.title || '').toLowerCase().startsWith('service completed:'))
+    .map(h => ({
+      date: h.created_at, title: h.title || 'Asset updated', body: h.detail || 'Asset record updated', tone: 'created'
+    }))
   const items = [
     { date: asset.created_at, title: 'Asset created', body: `${asset.type || 'Asset'} registered in ${asset.location || 'no location set'}`, tone: 'created' },
     ...editEvents,

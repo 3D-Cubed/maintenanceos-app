@@ -35,3 +35,5 @@ The uploaded ZIP was used as the sole source baseline.
 ## V22.0 — Stability Hardening
 - Consolidated QR, fault, stock, asset-history and Part Intelligence fixes.
 - Added single production hardening migration.
+
+- **V23.3** — Removed duplicate service timeline generation and polished Part Intelligence modal layout/overflow handling.

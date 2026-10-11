@@ -1270,3 +1270,110 @@ a.part-link:hover{
 .part-document-panel{margin:16px 0;padding:16px 18px;border:1px solid rgba(92,242,216,.18);border-radius:18px;background:linear-gradient(135deg,rgba(28,223,190,.06),rgba(255,255,255,.025));box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
 .part-document-panel h3{margin:4px 0 2px}.part-document-panel .form-grid{margin-top:14px}.part-document-panel .primary.compact{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;min-height:38px;padding:8px 12px}.part-detail-document{display:flex;align-items:center;justify-content:space-between;gap:18px}.part-detail-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.part-archived{opacity:.68}.part-archived::after{content:'ARCHIVED';position:absolute;top:12px;right:12px;padding:4px 7px;border-radius:999px;font-size:.65rem;font-weight:900;letter-spacing:.08em;border:1px solid rgba(255,180,100,.35);background:rgba(120,65,20,.25);color:#ffd29a}.part-form-card{width:min(980px,calc(100vw - 28px))}.part-form-card .resolve-actions{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:10px}.service-parts-field{grid-column:1/-1}.service-parts-field .part-picker-row{grid-template-columns:minmax(240px,1fr) 90px auto}.service-parts-field .selected-part small{margin-left:8px;color:#9fffe8;font-weight:800}
 @media(max-width:700px){.part-detail-document{flex-direction:column;align-items:stretch}.part-detail-actions{justify-content:flex-start}.part-form-card .resolve-actions{grid-template-columns:1fr 1fr}.part-form-card .resolve-actions span{display:none}.service-parts-field .part-picker-row{grid-template-columns:1fr 80px}.service-parts-field .part-picker-row button{grid-column:1/-1;width:100%}}
+
+
+/* V23.3 — Part Intelligence modal final layout polish
+   Keep the modal self-contained at all desktop widths: no horizontal page/card
+   scrolling, predictable metric widths, and a dedicated glass image stage. */
+.part-detail-card {
+  width: min(1120px, calc(100vw - 32px)) !important;
+  max-width: 1120px !important;
+  max-height: calc(100dvh - 32px) !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  box-sizing: border-box;
+  padding: 30px;
+}
+.part-detail-card .resolve-head {
+  min-width: 0;
+  gap: 20px;
+}
+.part-detail-card .resolve-head > div:first-child { min-width: 0; }
+.part-detail-card .resolve-head h2 {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.part-detail-card .part-detail-actions {
+  min-width: 0;
+  flex: 0 0 auto;
+}
+.part-detail-card > .part-detail-image {
+  display: block;
+  width: 100%;
+  height: 300px;
+  max-height: none;
+  object-fit: contain;
+  object-position: center;
+  padding: 24px;
+  margin: 18px 0 24px;
+  box-sizing: border-box;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 50% 35%, rgba(54,232,203,.10), transparent 45%),
+    linear-gradient(145deg, rgba(255,255,255,.045), rgba(20,71,78,.10));
+  border: 1px solid rgba(121,241,221,.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.08),
+    inset 0 -30px 70px rgba(0,15,22,.16),
+    0 18px 50px rgba(0,0,0,.20);
+}
+.part-detail-card .compact-stats {
+  width: 100%;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0 0 30px;
+}
+.part-detail-card .compact-stats .stat {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 22px 20px;
+  border-radius: 22px;
+}
+.part-detail-card .compact-stats .stat h2 {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: clamp(1.65rem, 2.7vw, 2.25rem);
+  line-height: 1.05;
+}
+.part-detail-card .compact-stats .stat-cost h2 {
+  white-space: nowrap;
+  overflow: visible;
+  word-break: normal;
+  overflow-wrap: normal;
+  font-size: clamp(1.65rem, 2.8vw, 2.35rem);
+  letter-spacing: -.025em;
+}
+.part-detail-card .history-list,
+.part-detail-card .part-document-panel,
+.part-detail-card h3,
+.part-detail-card > .muted { min-width: 0; }
+.part-detail-card .data-row { min-width: 0; }
+.part-detail-card .data-row > div { min-width: 0; }
+.part-detail-card .data-row > span {
+  min-width: 0;
+  max-width: 35%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+@media (max-width: 900px) {
+  .part-detail-card { padding: 24px; }
+  .part-detail-card .compact-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .part-detail-card {
+    width: calc(100vw - 16px) !important;
+    max-height: calc(100dvh - 16px) !important;
+    padding: 18px;
+    border-radius: 24px;
+  }
+  .part-detail-card > .part-detail-image { height: 230px; padding: 16px; }
+  .part-detail-card .compact-stats { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .part-detail-card .compact-stats .stat { padding: 17px 15px; }
+  .part-detail-card .compact-stats .stat-cost h2 { font-size: 1.6rem; }
+}
