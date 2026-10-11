@@ -1,0 +1,13 @@
+MaintenanceOS V23.2 — Installation
+
+1. Run DB-V23.2-SERVICE-VISIBILITY.sql in Supabase SQL Editor.
+2. Wait for successful completion.
+3. Extract the V23.2 source over the working project.
+4. Run: npm install
+5. Run: npm run build
+6. Run: git add .
+7. Run: git commit -m "MaintenanceOS V23.2 service visibility"
+8. Run: git push origin main
+9. Allow Vercel to deploy.
+
+No existing records are deleted. Existing completed services are backfilled into asset history.

@@ -377,6 +377,10 @@ function renderDashboard() {
         ${repairs.filter(r => r.status !== 'Resolved').slice(0, 6).map(repairRow).join('') || '<p class="muted">No active faults.</p>'}
       </div>
     </section>
+    <section class="card">
+      <div class="section-title-row compact"><div><h2>Recent Engineering Activity</h2><p class="muted">Latest completed services and maintenance actions.</p></div></div>
+      ${serviceRecords.slice(0, 6).map(serviceRow).join('') || '<p class="muted">No completed services recorded yet.</p>'}
+    </section>
     <section class="card engineering-attention">
       <div class="section-title-row compact"><div><h2>Engineering Attention</h2><p class="muted">Deterministic signals from repeat faults and stock levels.</p></div></div>
       ${repeatSignals.slice(0,5).map(x => `<div class="attention-row"><div><b>Repeat failure • ${escapeHtml(x.assetName)}</b><p>${escapeHtml(x.label)} — ${x.count} related faults in ${x.days} days.</p></div><span class="badge warning">Investigate</span></div>`).join('') || '<p class="muted">No repeat-failure pattern detected.</p>'}
@@ -447,6 +451,12 @@ function value(selector) {
   return document.querySelector(selector)?.value?.trim() || ''
 }
 
+function serviceRow(record) {
+  const asset = assets.find(a => a.id === record.asset_id)
+  const cost = Number(record.total_cost || record.parts_cost || 0)
+  return `<div class="data-row service-activity-row"><div><h3>${escapeHtml(asset?.name || 'Unknown asset')}</h3><p>${escapeHtml(record.service_category || 'Service')} • ${new Date(record.completed_at || record.created_at).toLocaleString()}</p><small>${escapeHtml(record.parts_replaced || 'Service completed')}${cost ? ` • £${cost.toFixed(2)}` : ''}</small></div><button onclick="location.hash='asset/${record.asset_id}'">Open</button></div>`
+}
+
 function assetRow(a) {
   return `
     <div class="data-row">
@@ -471,6 +481,7 @@ async function renderAssetDetail(id) {
     return
   }
   const assetRepairs = repairs.filter(r => r.asset_id === id)
+  const assetServices = serviceRecords.filter(r => r.asset_id === id)
   const qrUrl = assetDeepLink(a.id)
   const qr = await QRCode.toDataURL(qrUrl)
 
@@ -512,7 +523,7 @@ async function renderAssetDetail(id) {
     </section>
     <section class="card">
       <h2>Asset History Timeline</h2>
-      ${assetHistoryTimeline(a, assetRepairs)}
+      ${assetHistoryTimeline(a, assetRepairs, assetServices)}
     </section>
   `
 
@@ -1354,7 +1365,7 @@ function statusClass(status = 'Operational') {
   return String(status).toLowerCase().replace(/\s+/g, '-')
 }
 
-function assetHistoryTimeline(asset, assetRepairs) {
+function assetHistoryTimeline(asset, assetRepairs, assetServices = []) {
   const editEvents = assetHistory.filter(h => h.asset_id === asset.id).map(h => ({
     date: h.created_at, title: h.title || 'Asset updated', body: h.detail || 'Asset record updated', tone: 'created'
   }))
@@ -1367,6 +1378,12 @@ function assetHistoryTimeline(asset, assetRepairs) {
       body: `${r.priority || 'Medium'} priority • ${r.status || 'Open'}${r.resolution_notes ? ` • ${r.resolution_notes}` : ''}`,
       tone: r.status === 'Resolved' ? 'resolved' : getRepairHealth(r).state,
       photo: r.photo_url
+    })),
+    ...assetServices.map(s => ({
+      date: s.completed_at || s.created_at,
+      title: `Service completed: ${s.service_category || 'Service'}`,
+      body: `${s.parts_replaced || 'Inspection/service completed'}${Number(s.total_cost || s.parts_cost || 0) ? ` • £${Number(s.total_cost || s.parts_cost || 0).toFixed(2)}` : ''}`,
+      tone: 'created'
     }))
   ].filter(i => i.date).sort((a,b) => new Date(b.date) - new Date(a.date))
 
